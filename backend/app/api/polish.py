@@ -47,7 +47,7 @@ async def polish_text(
         logger.info(f"开始AI去味处理，原文长度: {len(request.original_text)}")
         
         # 调用AI进行去味处理
-        polished_text = await ai_service.generate_text(
+        polished_text = await user_ai_service.generate_text(
             prompt=prompt,
             provider=request.provider,
             model=request.model,

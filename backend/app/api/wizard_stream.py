@@ -926,6 +926,7 @@ async def outline_generator(
         requirements = data.get("requirements", "")
         provider = data.get("provider")
         model = data.get("model")
+        user_id = data.get("user_id")  # 从中间件注入
         
         # 获取项目信息
         yield await SSEResponse.send_progress("加载项目信息...", 10)
