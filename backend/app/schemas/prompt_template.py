@@ -55,11 +55,32 @@ class PromptTemplateCategoryResponse(BaseModel):
     templates: List[PromptTemplateResponse]
 
 
+class PromptTemplateExportItem(BaseModel):
+    """提示词模板导出项模型"""
+    template_key: str = Field(..., description="模板键名")
+    template_name: str = Field(..., description="模板显示名称")
+    template_content: str = Field(..., description="模板内容")
+    description: Optional[str] = Field(None, description="模板描述")
+    category: Optional[str] = Field(None, description="模板分类")
+    parameters: Optional[str] = Field(None, description="模板参数定义(JSON)")
+    is_active: bool = Field(True, description="是否启用")
+    is_customized: bool = Field(..., description="是否为用户自定义（false=系统默认，true=用户自定义）")
+    system_content_hash: Optional[str] = Field(None, description="系统默认内容的哈希值，用于比对")
+
+
 class PromptTemplateExport(BaseModel):
     """提示词模板导出模型"""
-    templates: List[PromptTemplateBase]
+    templates: List[PromptTemplateExportItem]
     export_time: datetime
-    version: str = "1.0"
+    version: str = "2.0"
+    statistics: Optional[dict] = Field(None, description="导出统计信息")
+
+
+class PromptTemplateImportResult(BaseModel):
+    """提示词模板导入结果"""
+    message: str
+    statistics: dict = Field(..., description="导入统计信息")
+    converted_templates: List[dict] = Field(default_factory=list, description="被转换为自定义的模板列表")
 
 
 class PromptTemplatePreviewRequest(BaseModel):

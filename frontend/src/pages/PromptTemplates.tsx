@@ -57,6 +57,7 @@ interface CategoryGroup {
 
 export default function PromptTemplates() {
   const navigate = useNavigate();
+  const [modal, contextHolder] = Modal.useModal();
   const [categories, setCategories] = useState<CategoryGroup[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>('0');
   const [editingTemplate, setEditingTemplate] = useState<PromptTemplate | null>(null);
@@ -124,7 +125,7 @@ export default function PromptTemplates() {
 
   // 重置为系统默认
   const handleReset = async (templateKey: string) => {
-    Modal.confirm({
+    modal.confirm({
       title: '确认重置',
       content: '确定要重置为系统默认模板吗？这将覆盖您的自定义内容。',
       okText: '确定',
@@ -161,6 +162,8 @@ export default function PromptTemplates() {
   const handleExport = async () => {
     try {
       const response = await axios.post('/api/prompt-templates/export');
+      const stats = response.data.statistics;
+      
       const blob = new Blob([JSON.stringify(response.data, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -168,7 +171,15 @@ export default function PromptTemplates() {
       a.download = `prompt-templates-${new Date().toISOString().split('T')[0]}.json`;
       a.click();
       URL.revokeObjectURL(url);
-      message.success('导出成功');
+      
+      if (stats) {
+        message.success(
+          `成功导出 ${stats.total} 个提示词配置（${stats.customized} 个自定义，${stats.system_default} 个系统默认）`,
+          5
+        );
+      } else {
+        message.success('导出成功');
+      }
     } catch (error: any) {
       message.error(error.response?.data?.detail || '导出失败');
     }
@@ -179,8 +190,51 @@ export default function PromptTemplates() {
     try {
       const text = await file.text();
       const data = JSON.parse(text);
-      await axios.post('/api/prompt-templates/import', data);
-      message.success('导入成功');
+      const response = await axios.post('/api/prompt-templates/import', data);
+      
+      const result = response.data;
+      const stats = result.statistics;
+      
+      // 构建详细的成功消息
+      let successMsg = `导入成功！\n`;
+      if (stats) {
+        successMsg += `• 保持系统默认：${stats.kept_system_default} 个\n`;
+        successMsg += `• 创建/更新自定义：${stats.created_or_updated} 个`;
+        
+        if (stats.converted_to_custom > 0) {
+          successMsg += `\n• 检测到修改（已转为自定义）：${stats.converted_to_custom} 个`;
+        }
+      }
+      
+      // 如果有被转换的模板，显示详细信息
+      if (result.converted_templates && result.converted_templates.length > 0) {
+        modal.info({
+          title: '导入完成',
+          width: 600,
+          centered: true,
+          content: (
+            <div>
+              <p style={{ marginBottom: 16 }}>{successMsg}</p>
+              {result.converted_templates.length > 0 && (
+                <div>
+                  <p style={{ fontWeight: 'bold', marginBottom: 8 }}>以下模板内容与系统默认不一致，已转为自定义：</p>
+                  <ul style={{ marginLeft: 20 }}>
+                    {result.converted_templates.map((t: any) => (
+                      <li key={t.template_key}>
+                        {t.template_name} ({t.template_key})
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          ),
+          okText: '确定'
+        });
+      } else {
+        message.success(successMsg, 5);
+      }
+      
       loadTemplates();
     } catch (error: any) {
       message.error(error.response?.data?.detail || '导入失败');
@@ -191,7 +245,9 @@ export default function PromptTemplates() {
   const currentTemplates = getCurrentTemplates();
 
   return (
-    <div style={{
+    <>
+      {contextHolder}
+      <div style={{
       minHeight: '100vh',
       background: 'linear-gradient(180deg, var(--color-bg-base) 0%, #EEF2F3 100%)',
       padding: isMobile ? '20px 16px' : '40px 24px',
@@ -530,6 +586,7 @@ export default function PromptTemplates() {
           />
         </Space>
       </Modal>
-    </div >
+    </div>
+    </>
   );
 }
