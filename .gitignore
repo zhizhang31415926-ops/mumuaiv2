@@ -115,4 +115,5 @@ docs/
 data_old/
 backend/migrate_all_databases.py
 test_api.py
-backend/embedding/models--sentence-transformers--all-MiniLM-L6-v2
+# Embedding models (downloaded from HuggingFace at runtime)
+backend/embedding/
