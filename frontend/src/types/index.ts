@@ -193,7 +193,7 @@ export interface OutlineCreate {
 export interface OutlineUpdate {
   title?: string;
   content?: string;
-  // structure 暂不支持修改
+  structure?: string;  // 支持修改structure字段
   // order_index 只能通过 reorder 接口批量调整
 }
 

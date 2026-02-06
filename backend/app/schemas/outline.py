@@ -88,8 +88,8 @@ class OutlineUpdate(BaseModel):
     """更新大纲的请求模型"""
     title: Optional[str] = None
     content: Optional[str] = None
+    structure: Optional[str] = Field(None, description="结构化大纲数据(JSON)")
     # order_index 不允许通过普通更新修改，只能通过 reorder_outlines 接口批量调整
-    # structure 暂不支持修改
 
 
 class OutlineResponse(BaseModel):

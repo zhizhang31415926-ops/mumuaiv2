@@ -3,11 +3,10 @@ import { Button, List, Modal, Form, Input, message, Empty, Space, Popconfirm, Ca
 import { EditOutlined, DeleteOutlined, ThunderboltOutlined, BranchesOutlined, AppstoreAddOutlined, CheckCircleOutlined, ExclamationCircleOutlined, PlusOutlined, FileTextOutlined } from '@ant-design/icons';
 import { useStore } from '../store';
 import { useOutlineSync } from '../store/hooks';
-import { cardStyles } from '../components/CardStyles';
 import { SSEPostClient } from '../utils/sseClient';
 import { SSEProgressModal } from '../components/SSEProgressModal';
-import { outlineApi, chapterApi, projectApi } from '../services/api';
-import type { OutlineExpansionResponse, BatchOutlineExpansionResponse, ChapterPlanItem, ApiError } from '../types';
+import { outlineApi, chapterApi, projectApi, characterApi } from '../services/api';
+import type { OutlineExpansionResponse, BatchOutlineExpansionResponse, ChapterPlanItem, ApiError, Character } from '../types';
 
 // 角色预测数据类型
 interface PredictedCharacter {
@@ -113,9 +112,13 @@ export default function Outline() {
   const [manualCreateForm] = Form.useForm();
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [isExpanding, setIsExpanding] = useState(false);
+  const [projectCharacters, setProjectCharacters] = useState<Array<{ label: string; value: string }>>([]);
 
   // ✅ 新增：记录每个大纲的展开状态
   const [outlineExpandStatus, setOutlineExpandStatus] = useState<Record<string, boolean>>({});
+  
+  // ✅ 新增：记录场景区域的展开/折叠状态
+  const [scenesExpandStatus, setScenesExpandStatus] = useState<Record<string, boolean>>({});
 
   // 角色确认相关状态
   const [characterConfirmData, setCharacterConfirmData] = useState<CharacterConfirmationData | null>(null);
@@ -158,13 +161,31 @@ export default function Outline() {
     deleteOutline
   } = useOutlineSync();
 
-  // 初始加载大纲列表
+  // 初始加载大纲列表和角色列表
   useEffect(() => {
     if (currentProject?.id) {
       refreshOutlines();
+      // 加载项目角色列表
+      loadProjectCharacters();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentProject?.id]); // 只依赖 ID，不依赖函数
+
+  // 加载项目角色列表
+  const loadProjectCharacters = async () => {
+    if (!currentProject?.id) return;
+    try {
+      const characters = await characterApi.getCharacters(currentProject.id);
+      setProjectCharacters(
+        characters.map((char: Character) => ({
+          label: char.name,
+          value: char.name
+        }))
+      );
+    } catch (error) {
+      console.error('加载角色列表失败:', error);
+    }
+  };
 
   // ✅ 新增：加载所有大纲的展开状态
   useEffect(() => {
@@ -216,21 +237,76 @@ export default function Outline() {
   const handleOpenEditModal = (id: string) => {
     const outline = outlines.find(o => o.id === id);
     if (outline) {
-      editForm.setFieldsValue(outline);
+      // 解析structure数据
+      let structureData: {
+        characters?: string[];
+        scenes?: string[] | Array<{
+          location: string;
+          characters: string[];
+          purpose: string;
+        }>;
+        key_points?: string[];
+        emotion?: string;
+        goal?: string;
+      } = {};
+      
+      if (outline.structure) {
+        try {
+          structureData = JSON.parse(outline.structure);
+        } catch (e) {
+          console.error('解析structure失败:', e);
+        }
+      }
+      
+      // 处理场景数据 - 可能是字符串数组或对象数组
+      let scenesText = '';
+      if (structureData.scenes) {
+        if (typeof structureData.scenes[0] === 'string') {
+          // 字符串数组格式
+          scenesText = (structureData.scenes as string[]).join('\n');
+        } else {
+          // 对象数组格式
+          scenesText = (structureData.scenes as Array<{location: string; characters: string[]; purpose: string}>)
+            .map(s => `${s.location}|${(s.characters || []).join('、')}|${s.purpose}`)
+            .join('\n');
+        }
+      }
+      
+      // 处理情节要点数据
+      const keyPointsText = structureData.key_points ? structureData.key_points.join('\n') : '';
+      
+      // 设置表单初始值
+      editForm.setFieldsValue({
+        title: outline.title,
+        content: outline.content,
+        characters: structureData.characters || [],
+        scenes: scenesText,
+        key_points: keyPointsText,
+        emotion: structureData.emotion || '',
+        goal: structureData.goal || ''
+      });
+      
       modalApi.confirm({
         title: '编辑大纲',
-        width: 600,
+        width: 800,
         centered: true,
+        styles: {
+          body: {
+            maxHeight: 'calc(100vh - 200px)',
+            overflowY: 'auto'
+          }
+        },
         content: (
           <Form
             form={editForm}
             layout="vertical"
-            style={{ marginTop: 16 }}
+            style={{ marginTop: 12 }}
           >
             <Form.Item
               label="标题"
               name="title"
               rules={[{ required: true, message: '请输入标题' }]}
+              style={{ marginBottom: 12 }}
             >
               <Input placeholder="输入大纲标题" />
             </Form.Item>
@@ -239,8 +315,67 @@ export default function Outline() {
               label="内容"
               name="content"
               rules={[{ required: true, message: '请输入内容' }]}
+              style={{ marginBottom: 12 }}
             >
-              <TextArea rows={6} placeholder="输入大纲内容..." />
+              <TextArea rows={4} placeholder="输入大纲内容..." />
+            </Form.Item>
+            
+            <Form.Item
+              label="涉及角色"
+              name="characters"
+              tooltip="从项目角色中选择，也可以手动输入新角色名"
+              style={{ marginBottom: 12 }}
+            >
+              <Select
+                mode="tags"
+                style={{ width: '100%' }}
+                placeholder="选择或输入角色名"
+                options={projectCharacters}
+                tokenSeparators={[',', '，']}
+                maxTagCount="responsive"
+              />
+            </Form.Item>
+            
+            <Form.Item
+              label="场景信息"
+              name="scenes"
+              tooltip="支持两种格式：简单描述（每行一个场景）或详细格式（地点|角色|目的）"
+              style={{ marginBottom: 12 }}
+            >
+              <TextArea
+                rows={3}
+                placeholder="每行一个场景&#10;详细格式：地点|角色1、角色2|目的"
+              />
+            </Form.Item>
+            
+            <Form.Item
+              label="情节要点"
+              name="key_points"
+              tooltip="每行一个情节要点"
+              style={{ marginBottom: 12 }}
+            >
+              <TextArea
+                rows={2}
+                placeholder="每行一个情节要点"
+              />
+            </Form.Item>
+            
+            <Form.Item
+              label="情感基调"
+              name="emotion"
+              tooltip="描述本章的情感氛围"
+              style={{ marginBottom: 12 }}
+            >
+              <Input placeholder="例如：冷冽与躁动并存" />
+            </Form.Item>
+            
+            <Form.Item
+              label="叙事目标"
+              name="goal"
+              tooltip="本章要达成的叙事目的"
+              style={{ marginBottom: 0 }}
+            >
+              <Input placeholder="例如：建立世界观对比并完成主角初遇" />
             </Form.Item>
           </Form>
         ),
@@ -249,9 +384,74 @@ export default function Outline() {
         onOk: async () => {
           const values = await editForm.validateFields();
           try {
-            await updateOutline(id, values);
+            // 解析并重构structure数据
+            const originalStructure = outline.structure ? JSON.parse(outline.structure) : {};
+            
+            // 处理角色数据 - Select组件已经返回数组
+            const characters = Array.isArray(values.characters)
+              ? values.characters.filter((c: string) => c && c.trim())
+              : [];
+            
+            // 处理场景数据 - 检测原始格式
+            let scenes: string[] | Array<{location: string; characters: string[]; purpose: string}> | undefined;
+            if (values.scenes) {
+              const lines = values.scenes.split('\n')
+                .map((line: string) => line.trim())
+                .filter((line: string) => line);
+              
+              // 检查是否包含管道符，判断格式
+              const hasStructuredFormat = lines.some((line: string) => line.includes('|'));
+              
+              if (hasStructuredFormat) {
+                // 尝试解析为对象数组格式
+                scenes = lines
+                  .map((line: string) => {
+                    const parts = line.split('|');
+                    if (parts.length >= 3) {
+                      return {
+                        location: parts[0].trim(),
+                        characters: parts[1].split('、').map(c => c.trim()).filter(c => c),
+                        purpose: parts[2].trim()
+                      };
+                    }
+                    return null;
+                  })
+                  .filter((s: { location: string; characters: string[]; purpose: string } | null): s is { location: string; characters: string[]; purpose: string } => s !== null);
+              } else {
+                // 保持字符串数组格式
+                scenes = lines;
+              }
+            }
+            
+            // 处理情节要点数据
+            const keyPoints = values.key_points
+              ? values.key_points.split('\n')
+                  .map((line: string) => line.trim())
+                  .filter((line: string) => line)
+              : undefined;
+            
+            // 合并structure数据，只包含AI实际生成的字段
+            const newStructure = {
+              ...originalStructure,
+              title: values.title,
+              summary: values.content,
+              characters: characters.length > 0 ? characters : undefined,
+              scenes: scenes && scenes.length > 0 ? scenes : undefined,
+              key_points: keyPoints && keyPoints.length > 0 ? keyPoints : undefined,
+              emotion: values.emotion || undefined,
+              goal: values.goal || undefined
+            };
+            
+            // 更新大纲
+            await updateOutline(id, {
+              title: values.title,
+              content: values.content,
+              structure: JSON.stringify(newStructure, null, 2)
+            });
+            
             message.success('大纲更新成功');
-          } catch {
+          } catch (error) {
+            console.error('更新失败:', error);
             message.error('更新失败');
           }
         },
@@ -2428,114 +2628,703 @@ export default function Outline() {
           {outlines.length === 0 ? (
             <Empty description="还没有大纲，开始创建吧！" />
           ) : (
-            <Card style={cardStyles.base}>
-              <List
-                dataSource={sortedOutlines}
-                renderItem={(item) => (
-                  <List.Item
-                    style={{
-                      padding: '16px 0',
-                      borderRadius: 8,
-                      transition: 'background 0.3s ease',
-                      flexDirection: isMobile ? 'column' : 'row',
-                      alignItems: isMobile ? 'flex-start' : 'center'
-                    }}
-                    actions={isMobile ? undefined : [
-                      ...(currentProject?.outline_mode === 'one-to-many' ? [
-                        <Button
-                          key="expand"
-                          type="text"
-                          icon={<BranchesOutlined />}
-                          onClick={() => handleExpandOutline(item.id, item.title)}
-                          loading={isExpanding}
-                          title="展开为多章"
-                        >
-                          展开
-                        </Button>
-                      ] : []), // 一对一模式：不显示任何展开/创建按钮
-                      <Button
-                        type="text"
-                        icon={<EditOutlined />}
-                        onClick={() => handleOpenEditModal(item.id)}
+            <List
+              dataSource={sortedOutlines}
+              renderItem={(item) => {
+                  // 解析structure字段获取所有信息
+                  let structureData: {
+                    key_events?: string[];
+                    key_points?: string[];  // AI生成的情节要点
+                    characters_involved?: string[];
+                    characters?: string[];
+                    scenes?: string[] | Array<{
+                      location: string;
+                      characters: string[];
+                      purpose: string;
+                    }>;
+                    emotion?: string;  // AI生成的情感基调
+                    goal?: string;  // AI生成的叙事目标
+                  } = {};
+                  
+                  if (item.structure) {
+                    try {
+                      structureData = JSON.parse(item.structure);
+                    } catch (e) {
+                      console.error('解析structure失败:', e);
+                    }
+                  }
+                  
+                  return (
+                    <List.Item
+                      style={{
+                        marginBottom: 16,
+                        padding: 0,
+                        border: 'none'
+                      }}
+                    >
+                      <Card
+                        style={{
+                          width: '100%',
+                          borderRadius: isMobile ? 6 : 8,
+                          border: '1px solid #f0f0f0',
+                          boxShadow: '0 1px 2px rgba(0, 0, 0, 0.03)',
+                          transition: 'all 0.3s ease'
+                        }}
+                        bodyStyle={{
+                          padding: isMobile ? '10px 12px' : 16
+                        }}
+                        onMouseEnter={(e) => {
+                          if (!isMobile) {
+                            e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.08)';
+                            e.currentTarget.style.borderColor = 'var(--color-primary)';
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          if (!isMobile) {
+                            e.currentTarget.style.boxShadow = '0 1px 2px rgba(0, 0, 0, 0.03)';
+                            e.currentTarget.style.borderColor = '#f0f0f0';
+                          }
+                        }}
                       >
-                        编辑
-                      </Button>,
-                      <Popconfirm
-                        title="确定删除这条大纲吗？"
-                        onConfirm={() => handleDeleteOutline(item.id)}
-                        okText="确定"
-                        cancelText="取消"
-                      >
-                        <Button type="text" danger icon={<DeleteOutlined />}>
-                          删除
-                        </Button>
-                      </Popconfirm>,
-                    ]}
-                  >
-                    <div style={{ width: '100%' }}>
-                      <List.Item.Meta
-                        title={
-                          <Space size="small" style={{ fontSize: isMobile ? 14 : 16, flexWrap: 'wrap' }}>
-                            <span style={{ color: 'var(--color-primary)', fontWeight: 'bold' }}>
-                              {currentProject?.outline_mode === 'one-to-one'
-                                ? `第${item.order_index || '?'}章`
-                                : `第${item.order_index || '?'}卷`
-                              }
-                            </span>
-                            <span>{item.title}</span>
-                            {/* ✅ 新增：展开状态标识 - 仅在一对多模式显示 */}
-                            {currentProject?.outline_mode === 'one-to-many' && (
-                              outlineExpandStatus[item.id] ? (
-                                <Tag color="success" icon={<CheckCircleOutlined />}>已展开</Tag>
-                              ) : (
-                                <Tag color="default">未展开</Tag>
-                              )
+                        <List.Item.Meta
+                          style={{ width: '100%' }}
+                          title={
+                            <Space size="small" style={{ fontSize: isMobile ? 13 : 16, flexWrap: 'wrap', lineHeight: isMobile ? '1.4' : '1.5' }}>
+                              <span style={{ color: 'var(--color-primary)', fontWeight: 'bold', fontSize: isMobile ? 13 : 16 }}>
+                                {currentProject?.outline_mode === 'one-to-one'
+                                  ? `第${item.order_index || '?'}章`
+                                  : `第${item.order_index || '?'}卷`
+                                }
+                              </span>
+                              <span style={{ fontSize: isMobile ? 13 : 16 }}>{item.title}</span>
+                              {/* ✅ 新增：展开状态标识 - 仅在一对多模式显示 */}
+                              {currentProject?.outline_mode === 'one-to-many' && (
+                                outlineExpandStatus[item.id] ? (
+                                  <Tag color="success" icon={<CheckCircleOutlined />} style={{ fontSize: isMobile ? 11 : 12 }}>已展开</Tag>
+                                ) : (
+                                  <Tag color="default" style={{ fontSize: isMobile ? 11 : 12 }}>未展开</Tag>
+                                )
+                              )}
+                            </Space>
+                          }
+                          description={
+                            <div style={{ fontSize: isMobile ? 12 : 14, lineHeight: isMobile ? '1.5' : '1.6' }}>
+                              {/* 大纲内容 */}
+                              <div style={{
+                                marginBottom: isMobile ? 10 : 12,
+                                padding: isMobile ? '8px 10px' : '10px 12px',
+                                background: 'linear-gradient(135deg, #fafafa 0%, #f5f5f5 100%)',
+                                borderLeft: '3px solid #8c8c8c',
+                                borderRadius: isMobile ? 4 : 6,
+                                fontSize: isMobile ? 12 : 13,
+                                color: '#262626',
+                                lineHeight: '1.6'
+                              }}>
+                                <div style={{
+                                  fontWeight: 600,
+                                  color: '#595959',
+                                  marginBottom: isMobile ? 4 : 6,
+                                  fontSize: isMobile ? 12 : 13
+                                }}>
+                                  📝 大纲内容
+                                </div>
+                                <div style={{
+                                  padding: isMobile ? '6px 8px' : '6px 10px',
+                                  background: '#ffffff',
+                                  border: '1px solid #d9d9d9',
+                                  borderRadius: 4,
+                                  fontSize: isMobile ? 12 : 13,
+                                  color: '#262626',
+                                  lineHeight: '1.6'
+                                }}>
+                                  {item.content}
+                                </div>
+                              </div>
+                              
+                              {/* ✨ 涉及角色展示 - 优化版 */}
+                              {structureData.characters && structureData.characters.length > 0 ? (
+                                <div style={{
+                                  marginTop: isMobile ? 10 : 12,
+                                  padding: isMobile ? '8px 10px' : '10px 12px',
+                                  background: 'linear-gradient(135deg, #f5f3ff 0%, #faf5ff 100%)',
+                                  borderLeft: '3px solid #9333ea',
+                                  borderRadius: isMobile ? 4 : 6
+                                }}>
+                                  <div style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: isMobile ? 6 : 8,
+                                    marginBottom: isMobile ? 6 : 8
+                                  }}>
+                                    <span style={{
+                                      fontSize: isMobile ? 12 : 13,
+                                      fontWeight: 600,
+                                      color: '#7c3aed',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: 4
+                                    }}>
+                                      👥 涉及角色
+                                      <Tag
+                                        color="purple"
+                                        style={{
+                                          margin: 0,
+                                          fontSize: 10,
+                                          borderRadius: 10,
+                                          padding: '0 6px'
+                                        }}
+                                      >
+                                        {structureData.characters.length}
+                                      </Tag>
+                                    </span>
+                                  </div>
+                                  <Space wrap size={[4, 4]}>
+                                    {structureData.characters.map((character, idx) => (
+                                      <Tag
+                                        key={idx}
+                                        color="purple"
+                                        style={{
+                                          margin: 0,
+                                          borderRadius: 4,
+                                          padding: isMobile ? '2px 8px' : '3px 10px',
+                                          fontSize: isMobile ? 11 : 12,
+                                          fontWeight: 500,
+                                          border: '1px solid #e9d5ff',
+                                          background: '#ffffff',
+                                          color: '#7c3aed',
+                                          whiteSpace: 'normal',
+                                          wordBreak: 'break-word',
+                                          height: 'auto',
+                                          lineHeight: '1.5'
+                                        }}
+                                      >
+                                        {character}
+                                      </Tag>
+                                    ))}
+                                  </Space>
+                                </div>
+                              ) : null}
+                              
+                              {/* ✨ 场景信息展示 - 优化版（支持折叠，最多显示3个） */}
+                              {structureData.scenes && structureData.scenes.length > 0 ? (() => {
+                                const isExpanded = scenesExpandStatus[item.id] || false;
+                                const maxVisibleScenes = 4;
+                                const hasMoreScenes = structureData.scenes!.length > maxVisibleScenes;
+                                const visibleScenes = isExpanded ? structureData.scenes : structureData.scenes!.slice(0, maxVisibleScenes);
+                                
+                                return (
+                                  <div style={{
+                                    marginTop: isMobile ? 10 : 12,
+                                    padding: isMobile ? '8px 10px' : '10px 12px',
+                                    background: 'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)',
+                                    borderLeft: '3px solid #0ea5e9',
+                                    borderRadius: isMobile ? 4 : 6
+                                  }}>
+                                    <div style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'space-between',
+                                      marginBottom: isMobile ? 6 : 8,
+                                      flexWrap: isMobile ? 'wrap' : 'nowrap',
+                                      gap: isMobile ? 4 : 0
+                                    }}>
+                                      <span style={{
+                                        fontSize: isMobile ? 12 : 13,
+                                        fontWeight: 600,
+                                        color: '#0284c7',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: 4
+                                      }}>
+                                        🎬 场景设定
+                                        <Tag
+                                          color="cyan"
+                                          style={{
+                                            margin: 0,
+                                            fontSize: 10,
+                                            borderRadius: 10,
+                                            padding: '0 6px'
+                                          }}
+                                        >
+                                          {structureData.scenes!.length}
+                                        </Tag>
+                                      </span>
+                                      {hasMoreScenes && (
+                                        <Button
+                                          type="text"
+                                          size="small"
+                                          onClick={() => setScenesExpandStatus(prev => ({
+                                            ...prev,
+                                            [item.id]: !isExpanded
+                                          }))}
+                                          style={{
+                                            fontSize: isMobile ? 10 : 11,
+                                            height: isMobile ? 20 : 22,
+                                            padding: isMobile ? '0 6px' : '0 8px',
+                                            color: '#0284c7'
+                                          }}
+                                        >
+                                          {isExpanded ? '收起 ▲' : `展开 (${structureData.scenes!.length - maxVisibleScenes}+) ▼`}
+                                        </Button>
+                                      )}
+                                    </div>
+                                    {/* 使用grid布局，移动端一列，桌面端两列 */}
+                                    <div style={{
+                                      display: 'grid',
+                                      gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fill, minmax(280px, 1fr))',
+                                      gap: isMobile ? 6 : 8,
+                                      width: '100%',
+                                      minWidth: 0  // 防止grid子元素溢出
+                                    }}>
+                                      {visibleScenes!.map((scene, idx) => {
+                                      // 判断是字符串还是对象
+                                      if (typeof scene === 'string') {
+                                        // 字符串格式：简洁卡片
+                                        return (
+                                          <div
+                                            key={idx}
+                                            style={{
+                                              padding: isMobile ? '6px 8px' : '8px 10px',
+                                              background: '#ffffff',
+                                              border: '1px solid #bae6fd',
+                                              borderRadius: isMobile ? 4 : 6,
+                                              fontSize: isMobile ? 11 : 12,
+                                              color: '#0c4a6e',
+                                              display: 'flex',
+                                              alignItems: 'flex-start',
+                                              gap: isMobile ? 6 : 8,
+                                              transition: 'all 0.2s ease',
+                                              cursor: 'default',
+                                              width: '100%',
+                                              minWidth: 0,
+                                              boxSizing: 'border-box'
+                                            }}
+                                            onMouseEnter={(e) => {
+                                              if (!isMobile) {
+                                                e.currentTarget.style.borderColor = '#0ea5e9';
+                                                e.currentTarget.style.boxShadow = '0 2px 8px rgba(14, 165, 233, 0.15)';
+                                              }
+                                            }}
+                                            onMouseLeave={(e) => {
+                                              if (!isMobile) {
+                                                e.currentTarget.style.borderColor = '#bae6fd';
+                                                e.currentTarget.style.boxShadow = 'none';
+                                              }
+                                            }}
+                                          >
+                                            <Tag
+                                              color="cyan"
+                                              style={{
+                                                margin: 0,
+                                                fontSize: 10,
+                                                borderRadius: 4,
+                                                flexShrink: 0
+                                              }}
+                                            >
+                                              {idx + 1}
+                                            </Tag>
+                                            <span style={{
+                                              flex: 1,
+                                              lineHeight: '1.6',
+                                              overflow: 'hidden',
+                                              textOverflow: 'ellipsis',
+                                              whiteSpace: 'nowrap'
+                                            }}>{scene}</span>
+                                          </div>
+                                        );
+                                      } else {
+                                        // 对象格式：详细卡片
+                                        return (
+                                          <div
+                                            key={idx}
+                                            style={{
+                                              padding: isMobile ? '8px 10px' : '10px 12px',
+                                              background: '#ffffff',
+                                              border: '1px solid #bae6fd',
+                                              borderRadius: isMobile ? 4 : 6,
+                                              fontSize: isMobile ? 11 : 12,
+                                              transition: 'all 0.2s ease',
+                                              cursor: 'default',
+                                              width: '100%',
+                                              minWidth: 0,
+                                              boxSizing: 'border-box'
+                                            }}
+                                            onMouseEnter={(e) => {
+                                              if (!isMobile) {
+                                                e.currentTarget.style.borderColor = '#0ea5e9';
+                                                e.currentTarget.style.boxShadow = '0 2px 8px rgba(14, 165, 233, 0.15)';
+                                              }
+                                            }}
+                                            onMouseLeave={(e) => {
+                                              if (!isMobile) {
+                                                e.currentTarget.style.borderColor = '#bae6fd';
+                                                e.currentTarget.style.boxShadow = 'none';
+                                              }
+                                            }}
+                                          >
+                                            <div style={{
+                                              display: 'flex',
+                                              alignItems: 'center',
+                                              gap: isMobile ? 6 : 8,
+                                              marginBottom: isMobile ? 4 : 6,
+                                              flexWrap: 'wrap'
+                                            }}>
+                                              <Tag
+                                                color="cyan"
+                                                style={{
+                                                  margin: 0,
+                                                  fontSize: 10,
+                                                  borderRadius: 4
+                                                }}
+                                              >
+                                                场景{idx + 1}
+                                              </Tag>
+                                              <span style={{
+                                                fontWeight: 600,
+                                                color: '#0c4a6e',
+                                                fontSize: isMobile ? 12 : 13,
+                                                flex: 1,
+                                                overflow: 'hidden',
+                                                textOverflow: 'ellipsis',
+                                                whiteSpace: 'nowrap'
+                                              }}>
+                                                📍 {scene.location}
+                                              </span>
+                                            </div>
+                                            {scene.characters && scene.characters.length > 0 && (
+                                              <div style={{
+                                                fontSize: isMobile ? 10 : 11,
+                                                color: '#64748b',
+                                                marginBottom: 4,
+                                                paddingLeft: isMobile ? 2 : 4,
+                                                overflow: 'hidden',
+                                                textOverflow: 'ellipsis',
+                                                whiteSpace: 'nowrap'
+                                              }}>
+                                                <span style={{ fontWeight: 500 }}>👤 角色：</span>
+                                                {scene.characters.join(' · ')}
+                                              </div>
+                                            )}
+                                            {scene.purpose && (
+                                              <div style={{
+                                                fontSize: isMobile ? 10 : 11,
+                                                color: '#64748b',
+                                                paddingLeft: isMobile ? 2 : 4,
+                                                lineHeight: '1.5',
+                                                overflow: 'hidden',
+                                                textOverflow: 'ellipsis',
+                                                whiteSpace: 'nowrap'
+                                              }}>
+                                                <span style={{ fontWeight: 500 }}>🎯 目的：</span>
+                                                {scene.purpose}
+                                              </div>
+                                            )}
+                                          </div>
+                                        );
+                                      }
+                                      })}
+                                    </div>
+                                  </div>
+                                );
+                              })() : null}
+                            
+                            {/* ✨ 关键事件展示 */}
+                            {structureData.key_events && structureData.key_events.length > 0 && (
+                              <div style={{
+                                marginTop: 12,
+                                padding: '10px 12px',
+                                background: 'linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%)',
+                                borderLeft: '3px solid #f97316',
+                                borderRadius: 6
+                              }}>
+                                <div style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 8,
+                                  marginBottom: 8
+                                }}>
+                                  <span style={{
+                                    fontSize: 13,
+                                    fontWeight: 600,
+                                    color: '#ea580c',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 4
+                                  }}>
+                                    ⚡ 关键事件
+                                    <Tag
+                                      color="orange"
+                                      style={{
+                                        margin: 0,
+                                        fontSize: 11,
+                                        borderRadius: 10,
+                                        padding: '0 6px'
+                                      }}
+                                    >
+                                      {structureData.key_events.length}
+                                    </Tag>
+                                  </span>
+                                </div>
+                                <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                                  {structureData.key_events.map((event, idx) => (
+                                    <div
+                                      key={idx}
+                                      style={{
+                                        padding: '6px 10px',
+                                        background: '#ffffff',
+                                        border: '1px solid #fed7aa',
+                                        borderRadius: 4,
+                                        fontSize: 12,
+                                        color: '#9a3412',
+                                        display: 'flex',
+                                        alignItems: 'flex-start',
+                                        gap: 8
+                                      }}
+                                    >
+                                      <Tag
+                                        color="orange"
+                                        style={{
+                                          margin: 0,
+                                          fontSize: 11,
+                                          borderRadius: 4,
+                                          flexShrink: 0
+                                        }}
+                                      >
+                                        {idx + 1}
+                                      </Tag>
+                                      <span style={{
+                                        flex: 1,
+                                        lineHeight: '1.6',
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap'
+                                      }}>{event}</span>
+                                    </div>
+                                  ))}
+                                </Space>
+                              </div>
                             )}
-                          </Space>
-                        }
-                        description={
-                          <div style={{ fontSize: isMobile ? 12 : 14 }}>
-                            {item.content}
+                            
+                            {/* ✨ 情节要点展示 (key_points) */}
+                            {structureData.key_points && structureData.key_points.length > 0 && (
+                              <div style={{
+                                marginTop: 12,
+                                padding: '10px 12px',
+                                background: 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)',
+                                borderLeft: '3px solid #22c55e',
+                                borderRadius: 6
+                              }}>
+                                <div style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 8,
+                                  marginBottom: 8
+                                }}>
+                                  <span style={{
+                                    fontSize: 13,
+                                    fontWeight: 600,
+                                    color: '#15803d',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 4
+                                  }}>
+                                    💡 情节要点
+                                    <Tag
+                                      color="green"
+                                      style={{
+                                        margin: 0,
+                                        fontSize: 11,
+                                        borderRadius: 10,
+                                        padding: '0 6px'
+                                      }}
+                                    >
+                                      {structureData.key_points.length}
+                                    </Tag>
+                                  </span>
+                                </div>
+                                {/* 使用grid布局，移动端一列，桌面端两列 */}
+                                <div style={{
+                                  display: 'grid',
+                                  gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fill, minmax(280px, 1fr))',
+                                  gap: isMobile ? 6 : 8,
+                                  width: '100%',
+                                  minWidth: 0
+                                }}>
+                                  {structureData.key_points.map((point, idx) => (
+                                    <div
+                                      key={idx}
+                                      style={{
+                                        padding: isMobile ? '6px 8px' : '8px 10px',
+                                        background: '#ffffff',
+                                        border: '1px solid #bbf7d0',
+                                        borderRadius: isMobile ? 4 : 6,
+                                        fontSize: isMobile ? 11 : 12,
+                                        color: '#166534',
+                                        display: 'flex',
+                                        alignItems: 'flex-start',
+                                        gap: isMobile ? 6 : 8,
+                                        transition: 'all 0.2s ease',
+                                        cursor: 'default',
+                                        width: '100%',
+                                        minWidth: 0,
+                                        boxSizing: 'border-box'
+                                      }}
+                                      onMouseEnter={(e) => {
+                                        if (!isMobile) {
+                                          e.currentTarget.style.borderColor = '#22c55e';
+                                          e.currentTarget.style.boxShadow = '0 2px 8px rgba(34, 197, 94, 0.15)';
+                                        }
+                                      }}
+                                      onMouseLeave={(e) => {
+                                        if (!isMobile) {
+                                          e.currentTarget.style.borderColor = '#bbf7d0';
+                                          e.currentTarget.style.boxShadow = 'none';
+                                        }
+                                      }}
+                                    >
+                                      <Tag
+                                        color="green"
+                                        style={{
+                                          margin: 0,
+                                          fontSize: 10,
+                                          borderRadius: 4,
+                                          flexShrink: 0
+                                        }}
+                                      >
+                                        {idx + 1}
+                                      </Tag>
+                                      <span style={{
+                                        flex: 1,
+                                        lineHeight: '1.6',
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap'
+                                      }}>{point}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            
+                            {/* ✨ 情感基调展示 (emotion) */}
+                            {structureData.emotion && (
+                              <div style={{
+                                marginTop: 12,
+                                padding: '10px 12px',
+                                background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
+                                borderLeft: '3px solid #f59e0b',
+                                borderRadius: 6,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 8
+                              }}>
+                                <span style={{
+                                  fontSize: 13,
+                                  fontWeight: 600,
+                                  color: '#b45309'
+                                }}>
+                                  💫 情感基调：
+                                </span>
+                                <Tag
+                                  color="gold"
+                                  style={{
+                                    margin: 0,
+                                    fontSize: 12,
+                                    padding: '2px 12px',
+                                    borderRadius: 12,
+                                    background: '#ffffff',
+                                    border: '1px solid #fbbf24',
+                                    color: '#b45309'
+                                  }}
+                                >
+                                  {structureData.emotion}
+                                </Tag>
+                              </div>
+                            )}
+                            
+                            {/* ✨ 叙事目标展示 (goal) */}
+                            {structureData.goal && (
+                              <div style={{
+                                marginTop: 12,
+                                padding: '10px 12px',
+                                background: 'linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)',
+                                borderLeft: '3px solid #3b82f6',
+                                borderRadius: 6
+                              }}>
+                                <div style={{
+                                  fontSize: 13,
+                                  fontWeight: 600,
+                                  color: '#1e40af',
+                                  marginBottom: 6
+                                }}>
+                                  🎯 叙事目标
+                                </div>
+                                <div style={{
+                                  fontSize: 12,
+                                  color: '#1e3a8a',
+                                  lineHeight: '1.6',
+                                  padding: '6px 10px',
+                                  background: '#ffffff',
+                                  border: '1px solid #93c5fd',
+                                  borderRadius: 4,
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap'
+                                }}>
+                                  {structureData.goal}
+                                </div>
+                              </div>
+                            )}
                           </div>
                         }
                       />
-
-                      {/* 移动端：按钮显示在内容下方 */}
-                      {isMobile && (
-                        <Space style={{ marginTop: 12, width: '100%', justifyContent: 'flex-end' }} wrap>
-                          <Button
-                            type="text"
-                            icon={<EditOutlined />}
-                            onClick={() => handleOpenEditModal(item.id)}
-                            size="small"
-                          />
-                          {/* 一对多模式：显示展开按钮 */}
+                        
+                        {/* 操作按钮区域 - 在卡片内部 */}
+                        <div style={{
+                          marginTop: 16,
+                          paddingTop: 12,
+                          borderTop: '1px solid #f0f0f0',
+                          display: 'flex',
+                          justifyContent: 'flex-end',
+                          gap: 8
+                        }}>
                           {currentProject?.outline_mode === 'one-to-many' && (
                             <Button
-                              type="text"
                               icon={<BranchesOutlined />}
                               onClick={() => handleExpandOutline(item.id, item.title)}
                               loading={isExpanding}
-                              size="small"
-                              title="展开为多章"
-                            />
+                              size={isMobile ? 'middle' : 'small'}
+                            >
+                              展开
+                            </Button>
                           )}
-                          {/* 一对一模式：不显示任何展开/创建按钮 */}
+                          <Button
+                            icon={<EditOutlined />}
+                            onClick={() => handleOpenEditModal(item.id)}
+                            size={isMobile ? 'middle' : 'small'}
+                          >
+                            编辑
+                          </Button>
                           <Popconfirm
                             title="确定删除这条大纲吗？"
                             onConfirm={() => handleDeleteOutline(item.id)}
                             okText="确定"
                             cancelText="取消"
                           >
-                            <Button type="text" danger icon={<DeleteOutlined />} size="small" />
+                            <Button
+                              danger
+                              icon={<DeleteOutlined />}
+                              size={isMobile ? 'middle' : 'small'}
+                            >
+                              删除
+                            </Button>
                           </Popconfirm>
-                        </Space>
-                      )}
-                    </div>
-                  </List.Item>
-                )}
+                        </div>
+                      </Card>
+                    </List.Item>
+                  );
+                }}
               />
-            </Card>
           )}
         </div>
       </div>

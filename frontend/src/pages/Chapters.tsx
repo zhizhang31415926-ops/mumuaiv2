@@ -592,12 +592,17 @@ export default function Chapters() {
 
   if (!currentProject) return null;
 
-  // 获取人称的中文显示文本
+  // 获取人称的中文显示文本（同时支持中英文值）
   const getNarrativePerspectiveText = (perspective?: string): string => {
     const texts: Record<string, string> = {
+      // 英文值映射（向后兼容）
       'first_person': '第一人称（我）',
       'third_person': '第三人称（他/她）',
       'omniscient': '全知视角',
+      // 中文值映射（项目设置使用）
+      '第一人称': '第一人称（我）',
+      '第三人称': '第三人称（他/她）',
+      '全知视角': '全知视角',
     };
     return texts[perspective || ''] || '第三人称（默认）';
   };
@@ -2419,9 +2424,9 @@ export default function Chapters() {
                 allowClear
                 disabled={isGenerating}
               >
-                <Select.Option value="first_person">第一人称(我)</Select.Option>
-                <Select.Option value="third_person">第三人称(他/她)</Select.Option>
-                <Select.Option value="omniscient">全知视角</Select.Option>
+                <Select.Option value="第一人称">第一人称(我)</Select.Option>
+                <Select.Option value="第三人称">第三人称(他/她)</Select.Option>
+                <Select.Option value="全知视角">全知视角</Select.Option>
               </Select>
               {temporaryNarrativePerspective && (
                 <div style={{ color: 'var(--color-success)', fontSize: 12, marginTop: 4 }}>
