@@ -52,7 +52,7 @@ RUN if [ "$USE_CN_MIRROR" = "true" ]; then \
     fi
 
 # 安装系统依赖（添加数据库工具）
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     postgresql-client \
     netcat-traditional \
@@ -67,7 +67,8 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
         pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu || \
         pip install --no-cache-dir torch; \
     else \
-        pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu; \
+        pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu || \
+        pip install --no-cache-dir torch; \
     fi
 
 # 安装其他Python依赖
@@ -131,8 +132,8 @@ ENV HF_DATASETS_OFFLINE=${PRELOAD_EMBEDDING_MODEL}
 ENV HF_HUB_OFFLINE=${PRELOAD_EMBEDDING_MODEL}
 
 # 健康检查
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)" || exit 1
 
 # 使用 entrypoint 脚本启动（自动执行迁移）
 ENTRYPOINT ["/app/entrypoint.sh"]

@@ -53,6 +53,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        USE_CN_MIRROR: ${USE_CN_MIRROR:-false}
+        PRELOAD_EMBEDDING_MODEL: ${PRELOAD_EMBEDDING_MODEL:-false}
     image: mumujie/mumuainovel:latest
     container_name: mumuainovel
     depends_on:
@@ -70,6 +73,7 @@ services:
       - APP_HOST=${APP_HOST:-0.0.0.0}
       - APP_PORT=8000
       - DEBUG=${DEBUG:-false}
+      - TZ=${TZ:-Asia/Shanghai}
       
       # 数据库配置
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-mumuai}:${POSTGRES_PASSWORD:-123456}@postgres:5432/${POSTGRES_DB:-mumuai_novel}
@@ -77,6 +81,8 @@ services:
       # 数据库连接信息（用于 entrypoint.sh）
       - DB_HOST=postgres
       - DB_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-mumuai}
+      - POSTGRES_DB=${POSTGRES_DB:-mumuai_novel}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-123456}
       
       # PostgreSQL 连接池配置
@@ -103,12 +109,19 @@ services:
       - DEFAULT_MODEL=${DEFAULT_MODEL:-gpt-4o-mini}
       - DEFAULT_TEMPERATURE=${DEFAULT_TEMPERATURE:-0.7}
       - DEFAULT_MAX_TOKENS=${DEFAULT_MAX_TOKENS:-32000}
+      # Embedding 配置（与写作模型配置解耦）
+      - DEFAULT_EMBEDDING_MODE=${DEFAULT_EMBEDDING_MODE:-local}
+      - DEFAULT_EMBEDDING_PROVIDER=${DEFAULT_EMBEDDING_PROVIDER:-openai}
+      - DEFAULT_EMBEDDING_MODEL=${DEFAULT_EMBEDDING_MODEL:-sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2}
+      - DEFAULT_EMBEDDING_API_KEY=${DEFAULT_EMBEDDING_API_KEY:-}
+      - DEFAULT_EMBEDDING_API_BASE_URL=${DEFAULT_EMBEDDING_API_BASE_URL:-https://api.openai.com/v1}
       
       # LinuxDO OAuth 配置
       - LINUXDO_CLIENT_ID=${LINUXDO_CLIENT_ID:-11111}
       - LINUXDO_CLIENT_SECRET=${LINUXDO_CLIENT_SECRET:-11111}
       - LINUXDO_REDIRECT_URI=${LINUXDO_REDIRECT_URI:-http://localhost:8000/api/auth/linuxdo/callback}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:8000}
+      - INITIAL_ADMIN_LINUXDO_ID=${INITIAL_ADMIN_LINUXDO_ID:-}
       
       # 本地账户登录配置
       - LOCAL_AUTH_ENABLED=${LOCAL_AUTH_ENABLED:-true}
@@ -119,6 +132,10 @@ services:
       # 会话配置
       - SESSION_EXPIRE_MINUTES=${SESSION_EXPIRE_MINUTES:-120}
       - SESSION_REFRESH_THRESHOLD_MINUTES=${SESSION_REFRESH_THRESHOLD_MINUTES:-30}
+      # 提示词工坊配置
+      - WORKSHOP_MODE=${WORKSHOP_MODE:-client}
+      - WORKSHOP_CLOUD_URL=${WORKSHOP_CLOUD_URL:-https://mumuverse.space:1566}
+      - WORKSHOP_API_TIMEOUT=${WORKSHOP_API_TIMEOUT:-30}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -136,4 +153,3 @@ volumes:
 networks:
   ai-story-network:
     driver: bridge
-
