@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Card, Button, Modal, message, Spin, Space, Tag, Progress, Typography, Alert, Upload, Checkbox, Tooltip, Drawer, Menu } from 'antd';
 import { EditOutlined, DeleteOutlined, BookOutlined, RocketOutlined, CalendarOutlined, FileTextOutlined, TrophyOutlined, SettingOutlined, UploadOutlined, DownloadOutlined, ApiOutlined, BulbOutlined, LoadingOutlined, FileSearchOutlined, MenuUnfoldOutlined, CloseOutlined } from '@ant-design/icons';
 import { projectApi } from '../services/api';
@@ -13,6 +13,8 @@ import ChangelogFloatingButton from '../components/ChangelogFloatingButton';
 import SettingsPage from './Settings';
 import MCPPluginsPage from './MCPPlugins';
 import PromptTemplates from './PromptTemplates';
+import BookAnalysis from './BookAnalysis';
+import PageErrorBoundary from '../components/PageErrorBoundary';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -38,8 +40,9 @@ const formatWordCount = (count: number): string => {
 
 export default function ProjectList() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { projects, loading } = useStore();
-  const [activeView, setActiveView] = useState<'projects' | 'settings' | 'mcp' | 'prompts'>('projects');
+  const [activeView, setActiveView] = useState<'projects' | 'settings' | 'mcp' | 'prompts' | 'book-analysis'>('projects');
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [modal, contextHolder] = Modal.useModal();
   const [showApiTip, setShowApiTip] = useState(true);
@@ -78,6 +81,14 @@ export default function ProjectList() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handleSwitchToMcp]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const view = params.get('view');
+    if (view === 'book-analysis') {
+      setActiveView('book-analysis');
+    }
+  }, [location.search]);
 
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -445,6 +456,29 @@ export default function ProjectList() {
                    <ApiOutlined />
                    MCP 插件
                 </div>
+                <div
+                  onClick={() => setActiveView('book-analysis')}
+                  style={{
+                    padding: '10px 16px',
+                    fontSize: 14,
+                    cursor: 'pointer',
+                    borderRadius: 4,
+                    color: activeView === 'book-analysis' ? 'var(--color-primary)' : 'rgba(0,0,0,0.85)',
+                    background: activeView === 'book-analysis' ? '#e6f7ff' : 'transparent',
+                    fontWeight: 500,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    transition: 'all 0.3s',
+                    marginBottom: 4,
+                    borderRight: activeView === 'book-analysis' ? '3px solid var(--color-primary)' : '3px solid transparent'
+                  }}
+                  onMouseEnter={e => activeView !== 'book-analysis' && (e.currentTarget.style.background = 'rgba(0,0,0,0.04)')}
+                  onMouseLeave={e => activeView !== 'book-analysis' && (e.currentTarget.style.background = 'transparent')}
+                >
+                   <FileTextOutlined />
+                   拆书分析
+                </div>
 
                 <div style={{ padding: '0 12px', fontSize: 12, color: 'rgba(0,0,0,0.45)', marginBottom: 8, marginTop: 16 }}>系统设置</div>
                 <div
@@ -529,6 +563,7 @@ export default function ProjectList() {
                paddingRight: 36  // 为了与左侧菜单按钮对称
              }}>
                {activeView === 'projects' ? '我的书架' :
+                activeView === 'book-analysis' ? '拆书分析' :
                 activeView === 'prompts' ? '提示词模板' :
                 activeView === 'mcp' ? 'MCP 插件' : 'API 设置'}
              </span>
@@ -577,7 +612,7 @@ export default function ProjectList() {
                 selectedKeys={[activeView]}
                 style={{ borderRight: 0, paddingTop: 8 }}
                 onClick={({ key }) => {
-                  setActiveView(key as 'projects' | 'settings' | 'mcp' | 'prompts');
+                  setActiveView(key as 'projects' | 'settings' | 'mcp' | 'prompts' | 'book-analysis');
                   setDrawerVisible(false);
                 }}
                 items={[
@@ -599,6 +634,11 @@ export default function ProjectList() {
                         key: 'mcp',
                         icon: <ApiOutlined />,
                         label: 'MCP 插件',
+                      },
+                      {
+                        key: 'book-analysis',
+                        icon: <FileTextOutlined />,
+                        label: '拆书分析',
                       },
                     ],
                   },
@@ -675,6 +715,7 @@ export default function ProjectList() {
                 gap: 12
              }}>
                 {activeView === 'projects' ? '我的书架' :
+                 activeView === 'book-analysis' ? '拆书分析' :
                  activeView === 'prompts' ? '提示词模板' :
                  activeView === 'mcp' ? 'MCP 插件' : 'API 设置'}
              </h2>
@@ -750,6 +791,11 @@ export default function ProjectList() {
           {activeView === 'settings' && <SettingsPage />}
           {activeView === 'mcp' && <MCPPluginsPage />}
           {activeView === 'prompts' && <PromptTemplates />}
+          {activeView === 'book-analysis' && (
+            <PageErrorBoundary pageName="拆书分析">
+              <BookAnalysis />
+            </PageErrorBoundary>
+          )}
           
           {activeView === 'projects' && (
             <div style={{ maxWidth: 1600, margin: '0 auto', paddingBottom: 60 }}>
@@ -840,6 +886,21 @@ export default function ProjectList() {
                           block
                         >
                           灵感模式
+                        </Button>
+                        <Button
+                          size={isMobile ? 'middle' : 'large'}
+                          icon={<FileSearchOutlined />}
+                          onClick={() => navigate('/book-analysis')}
+                          style={{
+                            height: isMobile ? '38px' : '50px',
+                            fontSize: isMobile ? '14px' : '16px',
+                            borderColor: '#1677ff',
+                            color: '#1677ff',
+                            background: 'rgba(22, 119, 255, 0.08)'
+                          }}
+                          block
+                        >
+                          拆书分析
                         </Button>
                         <div style={{ textAlign: 'center', color: '#999', fontSize: isMobile ? 11 : 12, marginTop: isMobile ? 4 : 8 }}>
                             开始一个新的创作旅程

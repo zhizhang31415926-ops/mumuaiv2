@@ -22,12 +22,14 @@ import MCPPlugins from './pages/MCPPlugins';
 import UserManagement from './pages/UserManagement';
 import PromptTemplates from './pages/PromptTemplates';
 import Sponsor from './pages/Sponsor';
+import BookAnalysis from './pages/BookAnalysis';
 // import Polish from './pages/Polish';
 import Login from './pages/Login';
 import AuthCallback from './pages/AuthCallback';
 import ProtectedRoute from './components/ProtectedRoute';
 import AppFooter from './components/AppFooter';
 import SpringFestival from './components/SpringFestival';
+import PageErrorBoundary from './components/PageErrorBoundary';
 import './App.css';
 
 function App() {
@@ -49,6 +51,16 @@ function App() {
           <Route path="/projects" element={<ProtectedRoute><><ProjectList /><AppFooter sidebarWidth={220} /></></ProtectedRoute>} />
           <Route path="/wizard" element={<ProtectedRoute><ProjectWizardNew /></ProtectedRoute>} />
           <Route path="/inspiration" element={<ProtectedRoute><Inspiration /></ProtectedRoute>} />
+          <Route
+            path="/book-analysis"
+            element={
+              <ProtectedRoute>
+                <PageErrorBoundary pageName="拆书分析">
+                  <BookAnalysis />
+                </PageErrorBoundary>
+              </ProtectedRoute>
+            }
+          />
           <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
           <Route path="/prompt-templates" element={<ProtectedRoute><><PromptTemplates /><AppFooter /></></ProtectedRoute>} />
           <Route path="/mcp-plugins" element={<ProtectedRoute><MCPPlugins /></ProtectedRoute>} />

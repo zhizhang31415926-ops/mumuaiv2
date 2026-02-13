@@ -4,9 +4,14 @@ from sentence_transformers import SentenceTransformer
 from typing import List, Dict, Any, Optional
 import json
 from datetime import datetime
+import httpx
 from app.logger import get_logger
 import os
 import hashlib
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.config import settings as app_settings
+from app.models.settings import Settings
 
 logger = get_logger(__name__)
 
@@ -90,6 +95,29 @@ class MemoryService:
             
             # 初始化ChromaDB客户端(使用新API - PersistentClient)
             self.client = chromadb.PersistentClient(path=chroma_dir)
+
+            # Embedding 默认配置
+            default_embedding_model = app_settings.default_embedding_model or ""
+            self.local_model_name = (
+                default_embedding_model
+                if default_embedding_model.startswith("sentence-transformers/")
+                else "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+            )
+            self.default_api_model_name = (
+                default_embedding_model
+                if default_embedding_model and not default_embedding_model.startswith("sentence-transformers/")
+                else "text-embedding-3-small"
+            )
+
+            # API 模式下跳过启动期本地模型加载，避免首次启动被模型下载阻塞
+            default_mode = str(app_settings.default_embedding_mode or "local").strip().lower()
+            if default_mode == "api":
+                self.embedding_model = None
+                self._initialized = True
+                logger.info("✅ MemoryService初始化成功（API模式，已跳过本地Embedding模型预加载）")
+                logger.info(f"  - ChromaDB目录: {chroma_dir}")
+                logger.info(f"  - 本地Embedding模型(按需加载): {self.local_model_name}")
+                return
             
             # 初始化多语言embedding模型(支持中文)
             logger.info("🔄 正在加载Embedding模型...")
@@ -221,44 +249,207 @@ class MemoryService:
             self._initialized = True
             logger.info("✅ MemoryService初始化成功")
             logger.info(f"  - ChromaDB目录: {chroma_dir}")
-            logger.info(f"  - Embedding模型: paraphrase-multilingual-MiniLM-L12-v2")
+            logger.info(f"  - 本地Embedding模型: {self.local_model_name}")
             
         except Exception as e:
             logger.error(f"❌ MemoryService初始化失败: {str(e)}")
             raise
+
+    def _ensure_local_embedding_model(self) -> None:
+        """按需加载本地Embedding模型（仅在使用local模式时触发）。"""
+        if getattr(self, "embedding_model", None) is not None:
+            return
+
+        model_cache_dir = os.environ.get("SENTENCE_TRANSFORMERS_HOME", "embedding")
+        os.makedirs(model_cache_dir, exist_ok=True)
+        logger.info("🔄 按需加载本地Embedding模型...")
+
+        try:
+            self.embedding_model = SentenceTransformer(
+                self.local_model_name,
+                cache_folder=os.path.abspath(model_cache_dir),
+                device="cpu",
+                trust_remote_code=True,
+                local_files_only=False,
+            )
+            logger.info("✅ 本地Embedding模型按需加载成功")
+        except Exception as exc:
+            logger.error(f"❌ 本地Embedding模型按需加载失败: {exc}")
+            raise RuntimeError("无法加载本地Embedding模型，请检查网络或切换为API模式")
     
-    def get_collection(self, user_id: str, project_id: str):
+    async def _resolve_embedding_config(
+        self,
+        user_id: str,
+        db: Optional[AsyncSession] = None,
+        override: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, str]:
+        """解析用户当前 Embedding 配置（支持本地/API模式）。"""
+        config = {
+            "embedding_mode": (app_settings.default_embedding_mode or "local"),
+            "embedding_provider": (app_settings.default_embedding_provider or "openai"),
+            "embedding_model": (app_settings.default_embedding_model or self.local_model_name),
+            "embedding_api_key": (app_settings.default_embedding_api_key or ""),
+            "embedding_api_base_url": (
+                app_settings.default_embedding_api_base_url
+                or "https://api.openai.com/v1"
+            ),
+        }
+
+        if db is not None:
+            try:
+                result = await db.execute(select(Settings).where(Settings.user_id == user_id))
+                user_settings = result.scalar_one_or_none()
+                if user_settings:
+                    config.update({
+                        "embedding_mode": user_settings.embedding_mode or config["embedding_mode"],
+                        "embedding_provider": user_settings.embedding_provider or config["embedding_provider"],
+                        "embedding_model": user_settings.embedding_model or config["embedding_model"],
+                        "embedding_api_key": user_settings.embedding_api_key or config["embedding_api_key"],
+                        "embedding_api_base_url": user_settings.embedding_api_base_url or config["embedding_api_base_url"],
+                    })
+            except Exception as exc:
+                logger.warning(f"⚠️ 读取用户Embedding配置失败，使用默认配置: {exc}")
+
+        if override:
+            for key in (
+                "embedding_mode",
+                "embedding_provider",
+                "embedding_model",
+                "embedding_api_key",
+                "embedding_api_base_url",
+            ):
+                if override.get(key) is not None:
+                    config[key] = override[key]
+
+        mode = str(config.get("embedding_mode") or "local").strip().lower()
+        if mode not in ("local", "api"):
+            mode = "local"
+        config["embedding_mode"] = mode
+
+        provider = str(config.get("embedding_provider") or "openai").strip().lower()
+        if provider not in ("openai", "custom"):
+            provider = "openai"
+        config["embedding_provider"] = provider
+
+        if mode == "local":
+            config["embedding_model"] = self.local_model_name
+        else:
+            model = str(config.get("embedding_model") or "").strip()
+            config["embedding_model"] = model or self.default_api_model_name
+            config["embedding_api_base_url"] = (
+                str(config.get("embedding_api_base_url") or "").strip()
+                or "https://api.openai.com/v1"
+            )
+            config["embedding_api_key"] = str(config.get("embedding_api_key") or "").strip()
+
+        return config
+
+    def _build_collection_name(self, user_id: str, project_id: str, embedding_config: Dict[str, Any]) -> str:
+        """根据 embedding 配置生成 collection 名称。
+
+        - local 模式保持历史命名，兼容旧数据。
+        - api 模式按 provider+model 分集合，避免向量维度冲突。
+        """
+        user_hash = hashlib.sha256(user_id.encode()).hexdigest()[:8]
+        project_hash = hashlib.sha256(project_id.encode()).hexdigest()[:8]
+        base_name = f"u_{user_hash}_p_{project_hash}"
+
+        if embedding_config.get("embedding_mode") != "api":
+            return base_name
+
+        namespace = f"{embedding_config.get('embedding_provider', 'openai')}:{embedding_config.get('embedding_model', '')}"
+        embed_hash = hashlib.sha256(namespace.encode()).hexdigest()[:8]
+        return f"{base_name}_e_{embed_hash}"
+
+    def _list_project_collection_names(self, user_id: str, project_id: str) -> List[str]:
+        """列出某个用户项目对应的所有 collection（含历史命名与多模型命名）。"""
+        user_hash = hashlib.sha256(user_id.encode()).hexdigest()[:8]
+        project_hash = hashlib.sha256(project_id.encode()).hexdigest()[:8]
+        prefix = f"u_{user_hash}_p_{project_hash}"
+        collection_names: List[str] = []
+
+        try:
+            for item in self.client.list_collections():
+                name = item if isinstance(item, str) else getattr(item, "name", "")
+                if name and name.startswith(prefix):
+                    collection_names.append(name)
+        except Exception as exc:
+            logger.warning(f"⚠️ 获取collection列表失败: {exc}")
+
+        return collection_names
+
+    async def _embed_texts_with_api(self, texts: List[str], embedding_config: Dict[str, Any]) -> List[List[float]]:
+        """通过 OpenAI 兼容 embeddings 接口生成向量。"""
+        api_key = embedding_config.get("embedding_api_key", "")
+        api_base_url = embedding_config.get("embedding_api_base_url", "")
+        model = embedding_config.get("embedding_model", self.default_api_model_name)
+
+        if not api_key:
+            raise RuntimeError("Embedding API 模式已启用，但未配置 embedding_api_key")
+        if not api_base_url:
+            raise RuntimeError("Embedding API 模式已启用，但未配置 embedding_api_base_url")
+
+        url = f"{api_base_url.rstrip('/')}/embeddings"
+        payload = {"model": model, "input": texts}
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            data = response.json()
+
+        items = data.get("data", [])
+        if not isinstance(items, list) or not items:
+            raise RuntimeError("Embedding API 返回格式异常：缺少 data 字段")
+
+        items = sorted(items, key=lambda x: x.get("index", 0))
+        embeddings = [item.get("embedding") for item in items if item.get("embedding") is not None]
+        if len(embeddings) != len(texts):
+            raise RuntimeError(
+                f"Embedding 数量不匹配: expected={len(texts)}, actual={len(embeddings)}"
+            )
+        return embeddings
+
+    async def _embed_texts(
+        self,
+        texts: List[str],
+        embedding_config: Dict[str, Any]
+    ) -> List[List[float]]:
+        """根据配置选择本地/API生成向量。"""
+        if embedding_config.get("embedding_mode") == "api":
+            return await self._embed_texts_with_api(texts, embedding_config)
+
+        self._ensure_local_embedding_model()
+        vectors = self.embedding_model.encode(texts).tolist()
+        if vectors and isinstance(vectors[0], (int, float)):
+            return [vectors]
+        return vectors
+
+    def get_collection(
+        self,
+        user_id: str,
+        project_id: str,
+        embedding_config: Optional[Dict[str, Any]] = None
+    ):
         """
         获取或创建项目的记忆集合
         
-        每个用户的每个项目有独立的collection,实现数据隔离
-        
-        Args:
-            user_id: 用户ID
-            project_id: 项目ID
-        
-        Returns:
-            ChromaDB Collection对象
+        每个用户的每个项目有独立的 collection；API embedding 模式按 provider/model 分集合。
         """
-        # ChromaDB collection命名规则：
-        # 1. 3-63字符（最重要！）
-        # 2. 开头和结尾必须是字母或数字
-        # 3. 只能包含字母、数字、下划线或短横线
-        # 4. 不能包含连续的点(..)
-        # 5. 不能是有效的IPv4地址
-        
-        # 使用SHA256哈希压缩ID长度，确保不超过63字符
-        # 格式: u_{user_hash}_p_{project_hash} (约30字符)
-        user_hash = hashlib.sha256(user_id.encode()).hexdigest()[:8]
-        project_hash = hashlib.sha256(project_id.encode()).hexdigest()[:8]
-        collection_name = f"u_{user_hash}_p_{project_hash}"
-        
+        if embedding_config is None:
+            embedding_config = {"embedding_mode": "local", "embedding_provider": "openai", "embedding_model": self.local_model_name}
+
+        collection_name = self._build_collection_name(user_id, project_id, embedding_config)
+
         try:
             return self.client.get_or_create_collection(
                 name=collection_name,
                 metadata={
                     "user_id": user_id,
                     "project_id": project_id,
+                    "embedding_mode": embedding_config.get("embedding_mode", "local"),
+                    "embedding_provider": embedding_config.get("embedding_provider", "openai"),
+                    "embedding_model": embedding_config.get("embedding_model", self.local_model_name),
                     "created_at": datetime.now().isoformat()
                 }
             )
@@ -273,7 +464,9 @@ class MemoryService:
         memory_id: str,
         content: str,
         memory_type: str,
-        metadata: Dict[str, Any]
+        metadata: Dict[str, Any],
+        db: Optional[AsyncSession] = None,
+        embedding_config: Optional[Dict[str, Any]] = None
     ) -> bool:
         """
         添加记忆到向量数据库
@@ -290,10 +483,15 @@ class MemoryService:
             是否添加成功
         """
         try:
-            collection = self.get_collection(user_id, project_id)
-            
+            resolved_config = await self._resolve_embedding_config(
+                user_id=user_id,
+                db=db,
+                override=embedding_config
+            )
+            collection = self.get_collection(user_id, project_id, resolved_config)
+
             # 生成文本的向量表示
-            embedding = self.embedding_model.encode(content).tolist()
+            embedding = (await self._embed_texts([content], resolved_config))[0]
             
             # 准备元数据(ChromaDB要求所有值为基础类型)
             chroma_metadata = {
@@ -304,6 +502,7 @@ class MemoryService:
                 "tags": json.dumps(metadata.get("tags", []), ensure_ascii=False),
                 "title": str(metadata.get("title", ""))[:200],  # 限制长度
                 "is_foreshadow": int(metadata.get("is_foreshadow", 0)),
+                "embedding_model": str(resolved_config.get("embedding_model", ""))[:200],
                 "created_at": datetime.now().isoformat()
             }
             
@@ -333,7 +532,9 @@ class MemoryService:
         self,
         user_id: str,
         project_id: str,
-        memories: List[Dict[str, Any]]
+        memories: List[Dict[str, Any]],
+        db: Optional[AsyncSession] = None,
+        embedding_config: Optional[Dict[str, Any]] = None
     ) -> int:
         """
         批量添加记忆(性能更好)
@@ -350,21 +551,23 @@ class MemoryService:
             return 0
             
         try:
-            collection = self.get_collection(user_id, project_id)
+            resolved_config = await self._resolve_embedding_config(
+                user_id=user_id,
+                db=db,
+                override=embedding_config
+            )
+            collection = self.get_collection(user_id, project_id, resolved_config)
             
             ids = []
             documents = []
             metadatas = []
-            embeddings = []
+            documents_for_embedding = []
             
             # 批量准备数据
             for mem in memories:
                 ids.append(mem['id'])
                 documents.append(mem['content'])
-                
-                # 生成embedding
-                embedding = self.embedding_model.encode(mem['content']).tolist()
-                embeddings.append(embedding)
+                documents_for_embedding.append(mem['content'])
                 
                 # 准备元数据
                 metadata = mem.get('metadata', {})
@@ -376,9 +579,13 @@ class MemoryService:
                     "tags": json.dumps(metadata.get("tags", []), ensure_ascii=False),
                     "title": str(metadata.get("title", ""))[:200],
                     "is_foreshadow": int(metadata.get("is_foreshadow", 0)),
+                    "embedding_model": str(resolved_config.get("embedding_model", ""))[:200],
                     "created_at": datetime.now().isoformat()
                 }
                 metadatas.append(chroma_metadata)
+
+            # 批量生成embedding
+            embeddings = await self._embed_texts(documents_for_embedding, resolved_config)
             
             # 批量添加
             collection.add(
@@ -403,7 +610,9 @@ class MemoryService:
         memory_types: Optional[List[str]] = None,
         limit: int = 10,
         min_importance: float = 0.0,
-        chapter_range: Optional[tuple] = None
+        chapter_range: Optional[tuple] = None,
+        db: Optional[AsyncSession] = None,
+        embedding_config: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
         """
         语义搜索相关记忆
@@ -421,10 +630,15 @@ class MemoryService:
             相关记忆列表,按相似度排序
         """
         try:
-            collection = self.get_collection(user_id, project_id)
+            resolved_config = await self._resolve_embedding_config(
+                user_id=user_id,
+                db=db,
+                override=embedding_config
+            )
+            collection = self.get_collection(user_id, project_id, resolved_config)
             
             # 生成查询向量
-            query_embedding = self.embedding_model.encode(query).tolist()
+            query_embedding = (await self._embed_texts([query], resolved_config))[0]
             
             # 构建过滤条件 - ChromaDB要求使用$and组合多个条件
             where_filter = None
@@ -478,7 +692,8 @@ class MemoryService:
         project_id: str,
         current_chapter: int,
         recent_count: int = 3,
-        min_importance: float = 0.5
+        min_importance: float = 0.5,
+        db: Optional[AsyncSession] = None
     ) -> List[Dict[str, Any]]:
         """
         获取最近几章的重要记忆(用于保持连贯性)
@@ -494,7 +709,8 @@ class MemoryService:
             最近章节的记忆列表,按重要性排序
         """
         try:
-            collection = self.get_collection(user_id, project_id)
+            resolved_config = await self._resolve_embedding_config(user_id=user_id, db=db)
+            collection = self.get_collection(user_id, project_id, resolved_config)
             
             # 计算章节范围
             start_chapter = max(1, current_chapter - recent_count)
@@ -540,7 +756,8 @@ class MemoryService:
         self,
         user_id: str,
         project_id: str,
-        current_chapter: int
+        current_chapter: int,
+        db: Optional[AsyncSession] = None
     ) -> List[Dict[str, Any]]:
         """
         查找未完结的伏笔
@@ -554,7 +771,8 @@ class MemoryService:
             未完结伏笔列表
         """
         try:
-            collection = self.get_collection(user_id, project_id)
+            resolved_config = await self._resolve_embedding_config(user_id=user_id, db=db)
+            collection = self.get_collection(user_id, project_id, resolved_config)
             
             # 查找伏笔状态为1(已埋下但未回收)的记忆
             results = collection.get(
@@ -741,21 +959,24 @@ class MemoryService:
             是否删除成功
         """
         try:
-            collection = self.get_collection(user_id, project_id)
-            
-            # 查找该章节的所有记忆
-            results = collection.get(
-                where={"chapter_id": chapter_id}
-            )
-            
-            if results['ids']:
-                # 删除这些记忆
-                collection.delete(ids=results['ids'])
-                logger.info(f"🗑️ 已删除章节{chapter_id[:8]}的{len(results['ids'])}条记忆")
+            collection_names = self._list_project_collection_names(user_id, project_id)
+            if not collection_names:
+                logger.info(f"ℹ️ 项目{project_id[:8]}未找到任何向量collection")
                 return True
+
+            deleted_count = 0
+            for name in collection_names:
+                collection = self.client.get_collection(name=name)
+                results = collection.get(where={"chapter_id": chapter_id})
+                if results.get('ids'):
+                    collection.delete(ids=results['ids'])
+                    deleted_count += len(results['ids'])
+
+            if deleted_count > 0:
+                logger.info(f"🗑️ 已删除章节{chapter_id[:8]}的{deleted_count}条记忆")
             else:
                 logger.info(f"ℹ️ 章节{chapter_id[:8]}没有记忆需要删除")
-                return True
+            return True
                 
         except Exception as e:
             logger.error(f"❌ 删除章节记忆失败: {str(e)}")
@@ -777,23 +998,15 @@ class MemoryService:
             是否删除成功
         """
         try:
-            # 生成collection名称
-            user_hash = hashlib.sha256(user_id.encode()).hexdigest()[:8]
-            project_hash = hashlib.sha256(project_id.encode()).hexdigest()[:8]
-            collection_name = f"u_{user_hash}_p_{project_hash}"
-            
-            # 删除整个collection(这会清理所有向量数据)
-            try:
-                self.client.delete_collection(name=collection_name)
-                logger.info(f"🗑️ 已删除项目{project_id[:8]}的向量数据库collection: {collection_name}")
+            collection_names = self._list_project_collection_names(user_id, project_id)
+            if not collection_names:
+                logger.info(f"ℹ️ 项目{project_id[:8]}没有可删除的向量collection")
                 return True
-            except Exception as e:
-                # 如果collection不存在,也算成功
-                if "does not exist" in str(e).lower():
-                    logger.info(f"ℹ️ 项目{project_id[:8]}的collection不存在,无需删除")
-                    return True
-                else:
-                    raise
+
+            for name in collection_names:
+                self.client.delete_collection(name=name)
+                logger.info(f"🗑️ 已删除项目{project_id[:8]}的向量数据库collection: {name}")
+            return True
                 
         except Exception as e:
             logger.error(f"❌ 删除项目记忆失败: {str(e)}")
@@ -805,7 +1018,9 @@ class MemoryService:
         project_id: str,
         memory_id: str,
         content: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        db: Optional[AsyncSession] = None,
+        embedding_config: Optional[Dict[str, Any]] = None
     ) -> bool:
         """
         更新记忆内容或元数据
@@ -821,13 +1036,18 @@ class MemoryService:
             是否更新成功
         """
         try:
-            collection = self.get_collection(user_id, project_id)
+            resolved_config = await self._resolve_embedding_config(
+                user_id=user_id,
+                db=db,
+                override=embedding_config
+            )
+            collection = self.get_collection(user_id, project_id, resolved_config)
             
             update_data = {}
             
             if content:
                 # 重新生成embedding
-                embedding = self.embedding_model.encode(content).tolist()
+                embedding = (await self._embed_texts([content], resolved_config))[0]
                 update_data['embeddings'] = [embedding]
                 update_data['documents'] = [content]
             
@@ -859,7 +1079,8 @@ class MemoryService:
     async def get_memory_stats(
         self,
         user_id: str,
-        project_id: str
+        project_id: str,
+        db: Optional[AsyncSession] = None
     ) -> Dict[str, Any]:
         """
         获取记忆统计信息
@@ -872,7 +1093,8 @@ class MemoryService:
             统计信息字典
         """
         try:
-            collection = self.get_collection(user_id, project_id)
+            resolved_config = await self._resolve_embedding_config(user_id=user_id, db=db)
+            collection = self.get_collection(user_id, project_id, resolved_config)
             
             # 获取所有记忆
             all_memories = collection.get()

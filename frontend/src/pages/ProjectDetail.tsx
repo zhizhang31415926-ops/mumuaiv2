@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate, Outlet, Link, useLocation } from 'react-router-dom';
-import { Layout, Menu, Spin, Button, Drawer } from 'antd';
+import { Layout, Menu, Spin, Button, Drawer, Modal, message, Tooltip } from 'antd';
 import {
   ArrowLeftOutlined,
   FileTextOutlined,
@@ -18,6 +18,7 @@ import {
   TrophyOutlined,
   BulbOutlined,
   CloudOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons';
 import { useStore } from '../store';
 import { useCharacterSync, useOutlineSync, useChapterSync } from '../store/hooks';
@@ -35,6 +36,7 @@ export default function ProjectDetail() {
   const [collapsed, setCollapsed] = useState(false);
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [mobile, setMobile] = useState(isMobile());
+  const [rebuildingEmbeddings, setRebuildingEmbeddings] = useState(false);
 
   // 监听窗口大小变化
   useEffect(() => {
@@ -157,6 +159,11 @@ export default function ProjectDetail() {
       icon: <CloudOutlined />,
       label: <Link to={`/project/${projectId}/prompt-workshop`}>提示词工坊</Link>,
     },
+    {
+      key: 'book-analysis',
+      icon: <FileTextOutlined />,
+      label: <Link to="/?view=book-analysis">拆书分析</Link>,
+    },
     // {
     //   key: 'polish',
     //   icon: <ToolOutlined />,
@@ -182,6 +189,40 @@ export default function ProjectDetail() {
     // if (path.includes('/polish')) return 'polish';
     return 'sponsor'; // 默认选中赞助支持
   }, [location.pathname]);
+
+  const handleRebuildEmbeddings = () => {
+    if (!projectId) return;
+
+    Modal.confirm({
+      title: '重建项目 Embedding',
+      centered: true,
+      content: (
+        <div>
+          <p>将清空并重建该项目的向量记忆索引。</p>
+          <p>重建期间可继续浏览页面，但语义检索结果可能暂时不完整。</p>
+        </div>
+      ),
+      okText: '开始重建',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          setRebuildingEmbeddings(true);
+          const result = await projectApi.rebuildProjectEmbeddings(projectId);
+          message.success(
+            result?.message ||
+            `重建完成：${result?.rebuilt_memories ?? 0}/${result?.total_memories ?? 0}`
+          );
+        } catch (error) {
+          console.error('重建Embedding失败:', error);
+          message.error('重建Embedding失败');
+          throw error;
+        } finally {
+          setRebuildingEmbeddings(false);
+        }
+      },
+    });
+  };
 
   if (loading || !currentProject) {
     return (
@@ -350,7 +391,36 @@ export default function ProjectDetail() {
                 </div>
               ))}
             </div>
+            <Tooltip title="按当前设置重建该项目的向量记忆（Embedding）">
+              <Button
+                type="primary"
+                ghost
+                icon={<ReloadOutlined />}
+                loading={rebuildingEmbeddings}
+                onClick={handleRebuildEmbeddings}
+              >
+                重建 Embedding
+              </Button>
+            </Tooltip>
           </div>
+        )}
+
+        {mobile && (
+          <Tooltip title="重建 Embedding">
+            <Button
+              type="text"
+              icon={<ReloadOutlined />}
+              loading={rebuildingEmbeddings}
+              onClick={handleRebuildEmbeddings}
+              style={{
+                color: '#fff',
+                height: '36px',
+                width: '36px',
+                padding: 0,
+                zIndex: 1,
+              }}
+            />
+          </Tooltip>
         )}
       </Header>
 

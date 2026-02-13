@@ -130,6 +130,7 @@ from app.api import (
     wizard_stream, relationships, organizations,
     auth, users, settings, writing_styles, memories,
     mcp_plugins, admin, inspiration, prompt_templates,
+    book_analysis,
     changelog, careers, foreshadows, prompt_workshop
 )
 
@@ -154,6 +155,7 @@ app.include_router(mcp_plugins.router, prefix="/api")  # MCP插件管理API
 app.include_router(prompt_templates.router, prefix="/api")  # 提示词模板管理API
 app.include_router(changelog.router, prefix="/api")  # 更新日志API
 app.include_router(prompt_workshop.router, prefix="/api")  # 提示词工坊API
+app.include_router(book_analysis.router, prefix="/api")  # 拆书分析API
 
 static_dir = Path(__file__).parent.parent / "static"
 if static_dir.exists():

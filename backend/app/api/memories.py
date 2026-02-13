@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, desc, delete
 from typing import List, Optional
+from math import ceil
 from app.database import get_db
 from app.models.memory import StoryMemory, PlotAnalysis
 from app.models.chapter import Chapter
@@ -12,6 +13,7 @@ from app.services.plot_analyzer import get_plot_analyzer
 from app.services.foreshadow_service import foreshadow_service
 from app.services.ai_service import create_user_ai_service
 from app.models.settings import Settings
+from app.config import settings as app_settings
 from app.logger import get_logger
 from app.api.common import verify_project_access
 import uuid
@@ -56,7 +58,9 @@ async def analyze_chapter(
             raise HTTPException(status_code=400, detail="章节内容为空,无法分析")
         
         # 获取用户AI设置
-        settings_result = await db.execute(select(Settings))
+        settings_result = await db.execute(
+            select(Settings).where(Settings.user_id == user_id)
+        )
         settings = settings_result.scalar_one_or_none()
         
         if not settings:
@@ -147,6 +151,11 @@ async def analyze_chapter(
         )
         
         # 保存记忆到数据库和向量库
+        memory_embedding_model = (
+            settings.embedding_model
+            if settings.embedding_mode == "api" and settings.embedding_model
+            else memory_service.local_model_name
+        )
         saved_count = 0
         for mem_data in memories_data:
             memory_id = str(uuid.uuid4())
@@ -161,6 +170,7 @@ async def analyze_chapter(
                 content=mem_data['content'],
                 story_timeline=chapter.chapter_number,
                 vector_id=memory_id,
+                embedding_model=memory_embedding_model,
                 **mem_data['metadata']
             )
             db.add(memory)
@@ -172,7 +182,8 @@ async def analyze_chapter(
                 memory_id=memory_id,
                 content=mem_data['content'],
                 memory_type=mem_data['type'],
-                metadata=mem_data['metadata']
+                metadata=mem_data['metadata'],
+                db=db
             )
             saved_count += 1
         
@@ -315,7 +326,8 @@ async def search_memories(
             query=query,
             memory_types=memory_types,
             limit=limit,
-            min_importance=min_importance
+            min_importance=min_importance,
+            db=db
         )
         
         return {
@@ -348,7 +360,8 @@ async def get_unresolved_foreshadows(
         foreshadows = await memory_service.find_unresolved_foreshadows(
             user_id=user_id,
             project_id=project_id,
-            current_chapter=current_chapter
+            current_chapter=current_chapter,
+            db=db
         )
         
         return {
@@ -377,7 +390,8 @@ async def get_memory_stats(
         
         stats = await memory_service.get_memory_stats(
             user_id=user_id,
-            project_id=project_id
+            project_id=project_id,
+            db=db
         )
         
         return {
@@ -436,3 +450,126 @@ async def delete_chapter_memories(
         logger.error(f"❌ 删除记忆失败: {str(e)}")
         await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/projects/{project_id}/rebuild-embeddings")
+async def rebuild_project_embeddings(
+    project_id: str,
+    request: Request,
+    batch_size: int = 100,
+    db: AsyncSession = Depends(get_db)
+):
+    """一键重建项目 Embedding（按当前用户配置）"""
+    try:
+        user_id = getattr(request.state, 'user_id', None)
+        await verify_project_access(project_id, user_id, db)
+
+        if batch_size < 10:
+            batch_size = 10
+        if batch_size > 500:
+            batch_size = 500
+
+        # 获取用户配置，确定重建后记录的 embedding_model
+        settings_result = await db.execute(
+            select(Settings).where(Settings.user_id == user_id)
+        )
+        user_settings = settings_result.scalar_one_or_none()
+
+        embedding_mode = (user_settings.embedding_mode if user_settings else None) or app_settings.default_embedding_mode or "local"
+        if embedding_mode not in ("local", "api"):
+            embedding_mode = "local"
+
+        if embedding_mode == "api":
+            target_embedding_model = (
+                (user_settings.embedding_model if user_settings else None)
+                or app_settings.default_embedding_model
+                or "text-embedding-3-small"
+            )
+        else:
+            target_embedding_model = memory_service.local_model_name
+
+        # 读取项目所有结构化记忆（关系库）
+        memories_result = await db.execute(
+            select(StoryMemory)
+            .where(StoryMemory.project_id == project_id)
+            .order_by(StoryMemory.created_at.asc())
+        )
+        memories = memories_result.scalars().all()
+        total_memories = len(memories)
+
+        # 先清理该项目所有向量集合（兼容历史单集合和新多集合）
+        deleted_ok = await memory_service.delete_project_memories(
+            user_id=user_id,
+            project_id=project_id
+        )
+        if not deleted_ok:
+            raise HTTPException(status_code=500, detail="清理项目向量集合失败")
+
+        # 同步更新关系库中的 embedding_model 字段
+        for mem in memories:
+            mem.embedding_model = target_embedding_model
+        await db.commit()
+
+        if total_memories == 0:
+            return {
+                "success": True,
+                "message": "项目中暂无记忆数据，已完成向量集合清理",
+                "project_id": project_id,
+                "total_memories": 0,
+                "rebuilt_memories": 0,
+                "embedding_mode": embedding_mode,
+                "embedding_model": target_embedding_model,
+                "batches": 0
+            }
+
+        rebuilt_count = 0
+        batch_total = ceil(total_memories / batch_size)
+
+        for i in range(0, total_memories, batch_size):
+            chunk = memories[i:i + batch_size]
+            records = []
+            for mem in chunk:
+                records.append({
+                    "id": mem.vector_id or mem.id,
+                    "content": mem.content,
+                    "type": mem.memory_type,
+                    "metadata": {
+                        "chapter_id": mem.chapter_id or "",
+                        "chapter_number": mem.story_timeline or 0,
+                        "importance_score": mem.importance_score or 0.5,
+                        "tags": mem.tags or [],
+                        "title": mem.title or "",
+                        "is_foreshadow": mem.is_foreshadow or 0,
+                        "related_characters": mem.related_characters or [],
+                    }
+                })
+
+            added = await memory_service.batch_add_memories(
+                user_id=user_id,
+                project_id=project_id,
+                memories=records,
+                db=db
+            )
+            rebuilt_count += added
+            logger.info(
+                f"🔄 重建Embedding进度: project={project_id[:8]}, batch={i // batch_size + 1}/{batch_total}, "
+                f"batch_size={len(records)}, added={added}, total_added={rebuilt_count}"
+            )
+
+        return {
+            "success": True,
+            "message": f"Embedding重建完成：{rebuilt_count}/{total_memories}",
+            "project_id": project_id,
+            "total_memories": total_memories,
+            "rebuilt_memories": rebuilt_count,
+            "embedding_mode": embedding_mode,
+            "embedding_model": target_embedding_model,
+            "batches": batch_total
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 重建Embedding失败: {str(e)}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"重建Embedding失败: {str(e)}")

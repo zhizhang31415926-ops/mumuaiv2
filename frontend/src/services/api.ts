@@ -50,6 +50,9 @@ import type {
   PresetUpdateRequest,
   PresetListResponse,
   ChapterPlanItem,
+  BookSplitResponse,
+  BookAnalyzeRequest,
+  BookAnalyzeResponse,
 } from '../types';
 
 interface MCPPluginSimpleCreate {
@@ -287,6 +290,21 @@ export const projectApi = {
     api.put<unknown, Project>(`/projects/${id}`, data),
 
   deleteProject: (id: string) => api.delete(`/projects/${id}`),
+
+  rebuildProjectEmbeddings: (id: string, batchSize: number = 100) =>
+    api.post<unknown, {
+      success: boolean;
+      message: string;
+      project_id: string;
+      total_memories: number;
+      rebuilt_memories: number;
+      embedding_mode: string;
+      embedding_model: string;
+      batches: number;
+    }>(`/api/memories/projects/${id}/rebuild-embeddings`, null, {
+      baseURL: '',
+      params: { batch_size: batchSize },
+    }),
 
   exportProject: (id: string) => {
     window.open(`/api/projects/${id}/export`, '_blank');
@@ -818,6 +836,18 @@ export const inspirationApi = {
       genre: string[];
       narrative_perspective: string;
     }>('/inspiration/quick-generate', data),
+};
+
+export const bookAnalysisApi = {
+  splitChapters: (data: {
+    content: string;
+    min_chapter_length?: number;
+    fallback_paragraph_group_size?: number;
+  }) =>
+    api.post<unknown, BookSplitResponse>('/book-analysis/split', data),
+
+  analyzeBook: (data: BookAnalyzeRequest) =>
+    api.post<unknown, BookAnalyzeResponse>('/book-analysis/analyze', data),
 };
 
 export default api;

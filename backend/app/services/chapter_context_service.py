@@ -646,7 +646,8 @@ class OneToManyContextBuilder:
                 project_id=project_id,
                 query=query_text,
                 limit=15,
-                min_importance=0.0
+                min_importance=0.0,
+                db=db
             )
             
             # 过滤相关度>0.6
@@ -1147,7 +1148,8 @@ class OneToOneContextBuilder:
                     project_id=project.id,
                     query=query_text,
                     limit=15,
-                    min_importance=0.0
+                    min_importance=0.0,
+                    db=db
                 )
                 
                 # 过滤相关度阈值为0.6
@@ -1592,4 +1594,3 @@ class OneToOneContextBuilder:
         except Exception as e:
             logger.error(f"❌ 获取伏笔提醒失败: {str(e)}")
             return None
-

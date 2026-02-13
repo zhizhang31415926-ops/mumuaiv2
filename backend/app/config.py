@@ -77,6 +77,13 @@ class Settings(BaseSettings):
     default_model: str = "gpt-4"
     default_temperature: float = 0.7
     default_max_tokens: int = 32000
+
+    # Embedding 配置
+    default_embedding_mode: str = "local"  # local | api
+    default_embedding_provider: str = "openai"  # openai | custom(兼容OpenAI embeddings)
+    default_embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    default_embedding_api_key: Optional[str] = None
+    default_embedding_api_base_url: str = "https://api.openai.com/v1"
     
     # MCP配置
     mcp_max_rounds: int = 3  # MCP工具调用最大轮数（全局统一控制）

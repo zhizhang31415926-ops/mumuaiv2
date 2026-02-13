@@ -27,6 +27,7 @@ from app.models.analysis_task import AnalysisTask
 from app.models.memory import PlotAnalysis, StoryMemory
 from app.models.batch_generation_task import BatchGenerationTask
 from app.models.regeneration_task import RegenerationTask
+from app.models.settings import Settings
 from app.schemas.chapter import (
     ChapterCreate,
     ChapterUpdate,
@@ -1083,6 +1084,16 @@ async def analyze_chapter_background(
                 'type': mem['type'],
                 'metadata': mem['metadata']
             })
+
+        settings_result = await db_session.execute(
+            select(Settings).where(Settings.user_id == user_id)
+        )
+        user_settings = settings_result.scalar_one_or_none()
+        memory_embedding_model = (
+            user_settings.embedding_model
+            if user_settings and user_settings.embedding_mode == "api" and user_settings.embedding_model
+            else memory_service.local_model_name
+        )
             
         # 保存到关系数据库（写操作，需要锁）
         async with write_lock:
@@ -1105,7 +1116,8 @@ async def analyze_chapter_background(
                     chapter_position=text_position,
                     text_length=text_length,
                     related_characters=mem['metadata'].get('related_characters', []),
-                    related_locations=mem['metadata'].get('related_locations', [])
+                    related_locations=mem['metadata'].get('related_locations', []),
+                    embedding_model=memory_embedding_model
                 )
                 db_session.add(story_memory)
                 
@@ -1119,7 +1131,8 @@ async def analyze_chapter_background(
             added_count = await memory_service.batch_add_memories(
                 user_id=user_id,
                 project_id=project_id,
-                memories=memory_records
+                memories=memory_records,
+                db=db_session
             )
             logger.info(f"✅ 添加{added_count}条记忆到向量库")
         
@@ -3807,4 +3820,3 @@ async def apply_partial_regenerate(
         "old_word_count": old_word_count,
         "message": "局部重写已应用"
     }
-

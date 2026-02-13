@@ -15,6 +15,7 @@ export default function SettingsPage() {
   const isMobile = !screens.md; // md断点是768px
   const [form] = Form.useForm();
   const [modal, contextHolder] = Modal.useModal();
+  const embeddingMode = Form.useWatch('embedding_mode', form);
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [hasSettings, setHasSettings] = useState(false);
@@ -74,7 +75,13 @@ export default function SettingsPage() {
     setInitialLoading(true);
     try {
       const settings = await settingsApi.getSettings();
-      form.setFieldsValue(settings);
+      form.setFieldsValue({
+        ...settings,
+        embedding_mode: settings.embedding_mode || 'local',
+        embedding_provider: settings.embedding_provider || 'openai',
+        embedding_model: settings.embedding_model || 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2',
+        embedding_api_base_url: settings.embedding_api_base_url || 'https://api.openai.com/v1',
+      });
 
       // 判断是否为默认设置（id='0'表示来自.env的默认配置）
       if (settings.id === '0' || !settings.id) {
@@ -94,6 +101,10 @@ export default function SettingsPage() {
           api_provider: 'openai',
           api_base_url: 'https://api.openai.com/v1',
           llm_model: 'gpt-4',
+          embedding_mode: 'local',
+          embedding_provider: 'openai',
+          embedding_model: 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2',
+          embedding_api_base_url: 'https://api.openai.com/v1',
           temperature: 0.7,
           max_tokens: 2000,
         });
@@ -238,6 +249,11 @@ export default function SettingsPage() {
           api_key: '',
           api_base_url: 'https://api.openai.com/v1',
           llm_model: 'gpt-4',
+          embedding_mode: 'local',
+          embedding_provider: 'openai',
+          embedding_model: 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2',
+          embedding_api_key: '',
+          embedding_api_base_url: 'https://api.openai.com/v1',
           temperature: 0.7,
           max_tokens: 2000,
         });
@@ -276,6 +292,11 @@ export default function SettingsPage() {
     { value: 'gemini', label: 'Google Gemini', defaultUrl: 'https://generativelanguage.googleapis.com/v1beta' },
   ];
 
+  const embeddingProviders = [
+    { value: 'openai', label: 'OpenAI Compatible', defaultUrl: 'https://api.openai.com/v1' },
+    { value: 'custom', label: 'Custom(OpenAI-Compatible)', defaultUrl: 'https://api.openai.com/v1' },
+  ];
+
   const handleProviderChange = (value: string) => {
     const provider = apiProviders.find(p => p.value === value);
     if (provider && provider.defaultUrl) {
@@ -284,6 +305,23 @@ export default function SettingsPage() {
     // 清空模型列表，需要重新获取
     setModelOptions([]);
     setModelsFetched(false);
+  };
+
+  const handleEmbeddingModeChange = (value: string) => {
+    if (value === 'local') {
+      form.setFieldsValue({
+        embedding_model: 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2',
+      });
+      return;
+    }
+
+    if (value === 'api') {
+      form.setFieldsValue({
+        embedding_provider: form.getFieldValue('embedding_provider') || 'openai',
+        embedding_model: form.getFieldValue('embedding_model') || 'text-embedding-3-small',
+        embedding_api_base_url: form.getFieldValue('embedding_api_base_url') || 'https://api.openai.com/v1',
+      });
+    }
   };
 
   const handleFetchModels = async (silent: boolean = false) => {
@@ -1020,244 +1058,358 @@ export default function SettingsPage() {
                           onFinish={handleSave}
                           autoComplete="off"
                         >
-                          <Form.Item
-                            label={
-                              <Space size={4}>
-                                <span>API 提供商</span>
-                                <InfoCircleOutlined
-                                  title="选择你的AI服务提供商"
-                                  style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
-                                />
+                          <Card
+                            size="small"
+                            title={
+                              <Space>
+                                <span>写作 API 配置</span>
+                                <Tag color="processing">章节生成</Tag>
                               </Space>
                             }
-                            name="api_provider"
-                            rules={[{ required: true, message: '请选择API提供商' }]}
+                            style={{ marginBottom: isMobile ? 12 : 16 }}
                           >
-                            <Select size={isMobile ? 'middle' : 'large'} onChange={handleProviderChange}>
-                              {apiProviders.map(provider => (
-                                <Option key={provider.value} value={provider.value}>
-                                  {provider.label}
-                                </Option>
-                              ))}
-                            </Select>
-                          </Form.Item>
-
-                          <Form.Item
-                            label={
-                              <Space size={4}>
-                                <span>API 密钥</span>
-                                <InfoCircleOutlined
-                                  title="你的API密钥，将加密存储"
-                                  style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
-                                />
-                              </Space>
-                            }
-                            name="api_key"
-                            rules={[{ required: true, message: '请输入API密钥' }]}
-                          >
-                            <Input.Password
-                              size={isMobile ? 'middle' : 'large'}
-                              placeholder="sk-..."
-                              autoComplete="new-password"
-                            />
-                          </Form.Item>
-
-                          <Form.Item
-                            label={
-                              <Space size={4}>
-                                <span>API 地址</span>
-                                <InfoCircleOutlined
-                                  title="API的基础URL地址"
-                                  style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
-                                />
-                              </Space>
-                            }
-                            name="api_base_url"
-                            rules={[
-                              { required: true, message: '请输入API地址' },
-                              { type: 'url', message: '请输入有效的URL' }
-                            ]}
-                          >
-                            <Input
-                              size={isMobile ? 'middle' : 'large'}
-                              placeholder="https://api.openai.com/v1"
-                            />
-                          </Form.Item>
-
-                          <Form.Item
-                            label={
-                              <Space size={4}>
-                                <span>模型名称</span>
-                                <InfoCircleOutlined
-                                  title="AI模型的名称，如 gpt-4, gpt-3.5-turbo"
-                                  style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
-                                />
-                              </Space>
-                            }
-                            name="llm_model"
-                            rules={[{ required: true, message: '请输入或选择模型名称' }]}
-                          >
-                            <Select
-                              size={isMobile ? 'middle' : 'large'}
-                              showSearch
-                              placeholder={isMobile ? "选择模型" : "输入模型名称或点击获取"}
-                              optionFilterProp="label"
-                              loading={fetchingModels}
-                              onFocus={handleModelSelectFocus}
-                              filterOption={(input, option) =>
-                                (option?.label ?? '').toLowerCase().includes(input.toLowerCase()) ||
-                                (option?.description ?? '').toLowerCase().includes(input.toLowerCase())
+                            <Form.Item
+                              label={
+                                <Space size={4}>
+                                  <span>API 提供商</span>
+                                  <InfoCircleOutlined
+                                    title="选择你的AI服务提供商"
+                                    style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
+                                  />
+                                </Space>
                               }
-                              dropdownRender={(menu) => (
-                                <>
-                                  {menu}
-                                  {fetchingModels && (
-                                    <div style={{ padding: '8px 12px', color: 'var(--color-text-secondary)', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
-                                      <Spin size="small" /> 正在获取模型列表...
-                                    </div>
-                                  )}
-                                  {!fetchingModels && modelOptions.length === 0 && modelsFetched && (
-                                    <div style={{ padding: '8px 12px', color: '#ff4d4f', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
-                                      未能获取到模型列表，请检查 API 配置
-                                    </div>
-                                  )}
-                                  {!fetchingModels && modelOptions.length === 0 && !modelsFetched && (
-                                    <div style={{ padding: '8px 12px', color: 'var(--color-text-secondary)', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
-                                      点击输入框自动获取模型列表
-                                    </div>
-                                  )}
-                                </>
-                              )}
-                              notFoundContent={
-                                fetchingModels ? (
-                                  <div style={{ padding: '8px 12px', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
-                                    <Spin size="small" /> 加载中...
-                                  </div>
-                                ) : (
-                                  <div style={{ padding: '8px 12px', color: 'var(--color-text-secondary)', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
-                                    未找到匹配的模型
-                                  </div>
-                                )
+                              name="api_provider"
+                              rules={[{ required: true, message: '请选择API提供商' }]}
+                            >
+                              <Select size={isMobile ? 'middle' : 'large'} onChange={handleProviderChange}>
+                                {apiProviders.map(provider => (
+                                  <Option key={provider.value} value={provider.value}>
+                                    {provider.label}
+                                  </Option>
+                                ))}
+                              </Select>
+                            </Form.Item>
+
+                            <Form.Item
+                              label={
+                                <Space size={4}>
+                                  <span>API 密钥</span>
+                                  <InfoCircleOutlined
+                                    title="你的API密钥，将加密存储"
+                                    style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
+                                  />
+                                </Space>
                               }
-                              suffixIcon={
-                                !isMobile ? (
-                                  <div
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      if (!fetchingModels) {
-                                        setModelsFetched(false);
-                                        handleFetchModels(false);
+                              name="api_key"
+                              rules={[{ required: true, message: '请输入API密钥' }]}
+                            >
+                              <Input.Password
+                                size={isMobile ? 'middle' : 'large'}
+                                placeholder="sk-..."
+                                autoComplete="new-password"
+                              />
+                            </Form.Item>
+
+                            <Form.Item
+                              label={
+                                <Space size={4}>
+                                  <span>API 地址</span>
+                                  <InfoCircleOutlined
+                                    title="API的基础URL地址"
+                                    style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
+                                  />
+                                </Space>
+                              }
+                              name="api_base_url"
+                              rules={[
+                                { required: true, message: '请输入API地址' },
+                                { type: 'url', message: '请输入有效的URL' }
+                              ]}
+                            >
+                              <Input
+                                size={isMobile ? 'middle' : 'large'}
+                                placeholder="https://api.openai.com/v1"
+                              />
+                            </Form.Item>
+
+                            <Form.Item
+                              label={
+                                <Space size={4}>
+                                  <span>模型名称</span>
+                                  <InfoCircleOutlined
+                                    title="AI模型的名称，如 gpt-4, gpt-3.5-turbo"
+                                    style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
+                                  />
+                                </Space>
+                              }
+                              name="llm_model"
+                              rules={[{ required: true, message: '请输入或选择模型名称' }]}
+                            >
+                              <Select
+                                size={isMobile ? 'middle' : 'large'}
+                                showSearch
+                                placeholder={isMobile ? "选择模型" : "输入模型名称或点击获取"}
+                                optionFilterProp="label"
+                                loading={fetchingModels}
+                                onFocus={handleModelSelectFocus}
+                                filterOption={(input, option) =>
+                                  (option?.label ?? '').toLowerCase().includes(input.toLowerCase()) ||
+                                  (option?.description ?? '').toLowerCase().includes(input.toLowerCase())
+                                }
+                                dropdownRender={(menu) => (
+                                  <>
+                                    {menu}
+                                    {fetchingModels && (
+                                      <div style={{ padding: '8px 12px', color: 'var(--color-text-secondary)', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
+                                        <Spin size="small" /> 正在获取模型列表...
+                                      </div>
+                                    )}
+                                    {!fetchingModels && modelOptions.length === 0 && modelsFetched && (
+                                      <div style={{ padding: '8px 12px', color: '#ff4d4f', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
+                                        未能获取到模型列表，请检查 API 配置
+                                      </div>
+                                    )}
+                                    {!fetchingModels && modelOptions.length === 0 && !modelsFetched && (
+                                      <div style={{ padding: '8px 12px', color: 'var(--color-text-secondary)', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
+                                        点击输入框自动获取模型列表
+                                      </div>
+                                    )}
+                                  </>
+                                )}
+                                notFoundContent={
+                                  fetchingModels ? (
+                                    <div style={{ padding: '8px 12px', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
+                                      <Spin size="small" /> 加载中...
+                                    </div>
+                                  ) : (
+                                    <div style={{ padding: '8px 12px', color: 'var(--color-text-secondary)', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
+                                      未找到匹配的模型
+                                    </div>
+                                  )
+                                }
+                                suffixIcon={
+                                  !isMobile ? (
+                                    <div
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (!fetchingModels) {
+                                          setModelsFetched(false);
+                                          handleFetchModels(false);
+                                        }
+                                      }}
+                                      style={{
+                                        cursor: fetchingModels ? 'not-allowed' : 'pointer',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        padding: '0 4px',
+                                        height: '100%',
+                                        marginRight: -8
+                                      }}
+                                      title="重新获取模型列表"
+                                    >
+                                      <Button
+                                        type="text"
+                                        size="small"
+                                        icon={<ReloadOutlined />}
+                                        loading={fetchingModels}
+                                        style={{ pointerEvents: 'none' }}
+                                      >
+                                        刷新
+                                      </Button>
+                                    </div>
+                                  ) : undefined
+                                }
+                                options={modelOptions.map(model => ({
+                                  value: model.value,
+                                  label: model.label,
+                                  description: model.description
+                                }))}
+                                optionRender={(option) => (
+                                  <div>
+                                    <div style={{ fontWeight: 500, fontSize: isMobile ? '13px' : '14px' }}>{option.data.label}</div>
+                                    {option.data.description && (
+                                      <div style={{ fontSize: isMobile ? '11px' : '12px', color: '#8c8c8c', marginTop: '2px' }}>
+                                        {option.data.description}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              />
+                            </Form.Item>
+
+                            <Form.Item
+                              label={
+                                <Space size={4}>
+                                  <span>温度参数</span>
+                                  <InfoCircleOutlined
+                                    title="控制输出的随机性，值越高越随机（0.0-2.0）"
+                                    style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
+                                  />
+                                </Space>
+                              }
+                              name="temperature"
+                            >
+                              <Slider
+                                min={0}
+                                max={2}
+                                step={0.1}
+                                marks={{
+                                  0: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '0.0' },
+                                  0.7: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '0.7' },
+                                  1: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '1.0' },
+                                  2: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '2.0' }
+                                }}
+                              />
+                            </Form.Item>
+
+                            <Form.Item
+                              label={
+                                <Space size={4}>
+                                  <span>最大 Token 数</span>
+                                  <InfoCircleOutlined
+                                    title="单次请求的最大token数量"
+                                    style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
+                                  />
+                                </Space>
+                              }
+                              name="max_tokens"
+                              rules={[
+                                { required: true, message: '请输入最大token数' },
+                                { type: 'number', min: 1, message: '请输入大于0的数字' }
+                              ]}
+                            >
+                              <InputNumber
+                                size={isMobile ? 'middle' : 'large'}
+                                style={{ width: '100%' }}
+                                min={1}
+                                placeholder="2000"
+                              />
+                            </Form.Item>
+
+                            <Form.Item
+                              label={
+                                <Space size={4}>
+                                  <span>系统提示词</span>
+                                  <InfoCircleOutlined
+                                    title="设置全局系统提示词，每次AI调用时都会自动使用。可用于设定AI的角色、语言风格等"
+                                    style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
+                                  />
+                                </Space>
+                              }
+                              name="system_prompt"
+                            >
+                              <TextArea
+                                rows={4}
+                                placeholder="例如：你是一个专业的小说创作助手，请用生动、细腻的文字进行创作..."
+                                maxLength={10000}
+                                showCount
+                                style={{ fontSize: isMobile ? '13px' : '14px' }}
+                              />
+                            </Form.Item>
+                          </Card>
+
+                          <Card
+                            size="small"
+                            title={
+                              <Space>
+                                <span>Embedding 配置</span>
+                                <Tag color="geekblue">记忆检索</Tag>
+                              </Space>
+                            }
+                            style={{ marginBottom: isMobile ? 12 : 16 }}
+                          >
+                            <Alert
+                              type="info"
+                              showIcon
+                              style={{ marginBottom: isMobile ? 12 : 16 }}
+                              message="Embedding 配置与写作 API 配置已分离，互不影响"
+                              description="这里的配置仅用于记忆向量化和语义检索，不会影响章节生成模型。"
+                            />
+
+                            <Form.Item
+                              label={
+                                <Space size={4}>
+                                  <span>Embedding 来源</span>
+                                  <InfoCircleOutlined
+                                    title="长期记忆向量化来源：本地模型 或 API Embedding"
+                                    style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
+                                  />
+                                </Space>
+                              }
+                              name="embedding_mode"
+                              initialValue="local"
+                              rules={[{ required: true, message: '请选择Embedding来源' }]}
+                            >
+                              <Select size={isMobile ? 'middle' : 'large'} onChange={handleEmbeddingModeChange}>
+                                <Option value="local">本地模型（SentenceTransformer）</Option>
+                                <Option value="api">API Embedding</Option>
+                              </Select>
+                            </Form.Item>
+
+                            {embeddingMode === 'api' && (
+                              <>
+                                <Form.Item
+                                  label="Embedding API 提供商"
+                                  name="embedding_provider"
+                                  initialValue="openai"
+                                  rules={[{ required: true, message: '请选择Embedding API提供商' }]}
+                                >
+                                  <Select
+                                    size={isMobile ? 'middle' : 'large'}
+                                    onChange={(value) => {
+                                      const provider = embeddingProviders.find(p => p.value === value);
+                                      if (provider?.defaultUrl) {
+                                        form.setFieldValue('embedding_api_base_url', provider.defaultUrl);
                                       }
                                     }}
-                                    style={{
-                                      cursor: fetchingModels ? 'not-allowed' : 'pointer',
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      padding: '0 4px',
-                                      height: '100%',
-                                      marginRight: -8
-                                    }}
-                                    title="重新获取模型列表"
                                   >
-                                    <Button
-                                      type="text"
-                                      size="small"
-                                      icon={<ReloadOutlined />}
-                                      loading={fetchingModels}
-                                      style={{ pointerEvents: 'none' }}
-                                    >
-                                      刷新
-                                    </Button>
-                                  </div>
-                                ) : undefined
-                              }
-                              options={modelOptions.map(model => ({
-                                value: model.value,
-                                label: model.label,
-                                description: model.description
-                              }))}
-                              optionRender={(option) => (
-                                <div>
-                                  <div style={{ fontWeight: 500, fontSize: isMobile ? '13px' : '14px' }}>{option.data.label}</div>
-                                  {option.data.description && (
-                                    <div style={{ fontSize: isMobile ? '11px' : '12px', color: '#8c8c8c', marginTop: '2px' }}>
-                                      {option.data.description}
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                            />
-                          </Form.Item>
+                                    {embeddingProviders.map(provider => (
+                                      <Option key={provider.value} value={provider.value}>
+                                        {provider.label}
+                                      </Option>
+                                    ))}
+                                  </Select>
+                                </Form.Item>
 
-                          <Form.Item
-                            label={
-                              <Space size={4}>
-                                <span>温度参数</span>
-                                <InfoCircleOutlined
-                                  title="控制输出的随机性，值越高越随机（0.0-2.0）"
-                                  style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
-                                />
-                              </Space>
-                            }
-                            name="temperature"
-                          >
-                            <Slider
-                              min={0}
-                              max={2}
-                              step={0.1}
-                              marks={{
-                                0: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '0.0' },
-                                0.7: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '0.7' },
-                                1: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '1.0' },
-                                2: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '2.0' }
-                              }}
-                            />
-                          </Form.Item>
+                                <Form.Item
+                                  label="Embedding API 密钥"
+                                  name="embedding_api_key"
+                                  rules={[{ required: true, message: '请输入Embedding API密钥' }]}
+                                >
+                                  <Input.Password
+                                    size={isMobile ? 'middle' : 'large'}
+                                    placeholder="sk-..."
+                                    autoComplete="new-password"
+                                  />
+                                </Form.Item>
 
-                          <Form.Item
-                            label={
-                              <Space size={4}>
-                                <span>最大 Token 数</span>
-                                <InfoCircleOutlined
-                                  title="单次请求的最大token数量"
-                                  style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
-                                />
-                              </Space>
-                            }
-                            name="max_tokens"
-                            rules={[
-                              { required: true, message: '请输入最大token数' },
-                              { type: 'number', min: 1, message: '请输入大于0的数字' }
-                            ]}
-                          >
-                            <InputNumber
-                              size={isMobile ? 'middle' : 'large'}
-                              style={{ width: '100%' }}
-                              min={1}
-                              placeholder="2000"
-                            />
-                          </Form.Item>
+                                <Form.Item
+                                  label="Embedding API 地址"
+                                  name="embedding_api_base_url"
+                                  rules={[
+                                    { required: true, message: '请输入Embedding API地址' },
+                                    { type: 'url', message: '请输入有效的URL' }
+                                  ]}
+                                >
+                                  <Input
+                                    size={isMobile ? 'middle' : 'large'}
+                                    placeholder="https://api.openai.com/v1"
+                                  />
+                                </Form.Item>
+                              </>
+                            )}
 
-                          <Form.Item
-                            label={
-                              <Space size={4}>
-                                <span>系统提示词</span>
-                                <InfoCircleOutlined
-                                  title="设置全局系统提示词，每次AI调用时都会自动使用。可用于设定AI的角色、语言风格等"
-                                  style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
-                                />
-                              </Space>
-                            }
-                            name="system_prompt"
-                          >
-                            <TextArea
-                              rows={4}
-                              placeholder="例如：你是一个专业的小说创作助手，请用生动、细腻的文字进行创作..."
-                              maxLength={10000}
-                              showCount
-                              style={{ fontSize: isMobile ? '13px' : '14px' }}
-                            />
-                          </Form.Item>
+                            <Form.Item
+                              label="Embedding 模型"
+                              name="embedding_model"
+                              rules={[{ required: true, message: '请输入Embedding模型名称' }]}
+                            >
+                              <Input
+                                size={isMobile ? 'middle' : 'large'}
+                                placeholder={embeddingMode === 'api' ? 'text-embedding-3-small' : 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'}
+                              />
+                            </Form.Item>
+                          </Card>
 
                           {/* 测试结果展示 */}
                           {showTestResult && testResult && (

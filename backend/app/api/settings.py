@@ -36,6 +36,11 @@ def read_env_defaults() -> Dict[str, Any]:
         "api_key": app_settings.openai_api_key or app_settings.anthropic_api_key or "",
         "api_base_url": app_settings.openai_base_url or app_settings.anthropic_base_url or "",
         "llm_model": app_settings.default_model,
+        "embedding_mode": app_settings.default_embedding_mode,
+        "embedding_provider": app_settings.default_embedding_provider,
+        "embedding_model": app_settings.default_embedding_model,
+        "embedding_api_key": app_settings.default_embedding_api_key or "",
+        "embedding_api_base_url": app_settings.default_embedding_api_base_url or "https://api.openai.com/v1",
         "temperature": app_settings.default_temperature,
         "max_tokens": app_settings.default_max_tokens,
     }

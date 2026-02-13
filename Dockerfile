@@ -40,6 +40,7 @@ FROM python:3.11-slim
 ARG USE_CN_MIRROR
 ARG TARGETPLATFORM
 ARG TARGETARCH
+ARG PRELOAD_EMBEDDING_MODEL=false
 
 # 设置工作目录
 WORKDIR /app
@@ -83,15 +84,20 @@ RUN mkdir -p /app/embedding
 ENV SENTENCE_TRANSFORMERS_HOME=/app/embedding
 
 # 下载 embedding 模型（从 HuggingFace）
-# 使用 Python 脚本预下载模型，这样运行时不需要网络
-RUN python -c "\
+# 使用 Python 脚本预下载模型，这样运行时不需要网络。
+# 本地联调默认跳过预下载，避免构建阶段长时间卡在模型拉取。
+RUN if [ "$PRELOAD_EMBEDDING_MODEL" = "true" ]; then \
+      python -c "\
 from sentence_transformers import SentenceTransformer; \
 import os; \
 os.environ['SENTENCE_TRANSFORMERS_HOME'] = '/app/embedding'; \
 print('Downloading sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2...'); \
 model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'); \
 print('Model downloaded successfully!'); \
-"
+"; \
+    else \
+      echo "Skipping embedding model predownload (PRELOAD_EMBEDDING_MODEL=$PRELOAD_EMBEDDING_MODEL)"; \
+    fi
 
 # 复制后端代码（不包含embedding，因为已经下载了）
 COPY backend/ ./
@@ -119,10 +125,10 @@ ENV PYTHONUNBUFFERED=1
 ENV APP_HOST=0.0.0.0
 ENV APP_PORT=8000
 
-# 设置运行时为离线模式（模型已在构建时下载）
-ENV TRANSFORMERS_OFFLINE=1
-ENV HF_DATASETS_OFFLINE=1
-ENV HF_HUB_OFFLINE=1
+# 若构建时预下载模型，则运行时启用离线模式；否则允许在线拉取模型
+ENV TRANSFORMERS_OFFLINE=${PRELOAD_EMBEDDING_MODEL}
+ENV HF_DATASETS_OFFLINE=${PRELOAD_EMBEDDING_MODEL}
+ENV HF_HUB_OFFLINE=${PRELOAD_EMBEDDING_MODEL}
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

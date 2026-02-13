@@ -19,6 +19,11 @@ export interface Settings {
   api_key: string;
   api_base_url: string;
   llm_model: string;
+  embedding_mode?: 'local' | 'api';
+  embedding_provider?: 'openai' | 'custom';
+  embedding_model?: string;
+  embedding_api_key?: string;
+  embedding_api_base_url?: string;
   temperature: number;
   max_tokens: number;
   system_prompt?: string;
@@ -32,6 +37,11 @@ export interface SettingsUpdate {
   api_key?: string;
   api_base_url?: string;
   llm_model?: string;
+  embedding_mode?: 'local' | 'api';
+  embedding_provider?: 'openai' | 'custom';
+  embedding_model?: string;
+  embedding_api_key?: string;
+  embedding_api_base_url?: string;
   temperature?: number;
   max_tokens?: number;
   system_prompt?: string;
@@ -961,6 +971,48 @@ export interface PromptWorkshopAdminStats {
   total_pending: number;
   total_downloads: number;
   total_likes: number;
+}
+
+// ==================== 拆书分析类型定义 ====================
+
+export interface BookAnalysisChapterPreview {
+  index: number;
+  chapter_number: number;
+  title: string;
+  word_count: number;
+  preview: string;
+}
+
+export interface BookSplitResponse {
+  total_chapters: number;
+  detected_by_heading: boolean;
+  note?: string;
+  chapters: BookAnalysisChapterPreview[];
+}
+
+export interface BookAnalyzeRequest {
+  content: string;
+  project_id?: string;
+  enable_embedding?: boolean;
+  embedding_chunk_size?: number;
+  start_chapter?: number;
+  end_chapter?: number;
+  min_chapter_length?: number;
+  fallback_paragraph_group_size?: number;
+  max_chars?: number;
+}
+
+export interface BookAnalyzeResponse {
+  total_chapters: number;
+  analyzed_range: string;
+  analyzed_chars: number;
+  truncated: boolean;
+  result_markdown: string;
+  chapters: BookAnalysisChapterPreview[];
+  embedding_enabled: boolean;
+  embedding_project_id?: string;
+  embedding_saved_count: number;
+  embedding_error?: string;
 }
 
 // 提示词工坊分类常量
