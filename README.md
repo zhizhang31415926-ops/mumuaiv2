@@ -175,7 +175,13 @@ docker-compose up -d
 >
 > 1. **`.env` 文件挂载**: `docker-compose.yml` 会自动将 `.env` 挂载到容器，确保文件存在
 > 2. **数据库初始化**: `init_postgres.sql` 会在首次启动时自动执行，安装必要的PostgreSQL扩展
-> 3. **自行构建**: 如需从源码构建，请先下载 embedding 模型文件（[加群获取](frontend/public/qq.jpg)）
+> 3. **源码构建（可选）**: 支持构建参数 `USE_CN_MIRROR=true`（国内镜像）和 `PRELOAD_EMBEDDING_MODEL=true`（构建时预下载 embedding，适合离线环境）
+
+```bash
+# 可选：源码构建时启用国内镜像 + 预下载 embedding 模型
+USE_CN_MIRROR=true PRELOAD_EMBEDDING_MODEL=true docker-compose build
+docker-compose up -d
+```
 
 ### 使用 Docker Hub 镜像（推荐新手）
 
@@ -259,10 +265,13 @@ services:
       - APP_HOST=${APP_HOST:-0.0.0.0}
       - APP_PORT=8000
       - DEBUG=${DEBUG:-false}
+      - TZ=${TZ:-Asia/Shanghai}
       # 数据库配置
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-mumuai}:${POSTGRES_PASSWORD:-123456}@postgres:5432/${POSTGRES_DB:-mumuai_novel}
       - DB_HOST=postgres
       - DB_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-mumuai}
+      - POSTGRES_DB=${POSTGRES_DB:-mumuai_novel}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-123456}
       # PostgreSQL 连接池配置
       - DATABASE_POOL_SIZE=${DATABASE_POOL_SIZE:-30}
@@ -286,11 +295,18 @@ services:
       - DEFAULT_MODEL=${DEFAULT_MODEL:-gpt-4o-mini}
       - DEFAULT_TEMPERATURE=${DEFAULT_TEMPERATURE:-0.7}
       - DEFAULT_MAX_TOKENS=${DEFAULT_MAX_TOKENS:-32000}
+      # Embedding 配置（与写作模型配置解耦）
+      - DEFAULT_EMBEDDING_MODE=${DEFAULT_EMBEDDING_MODE:-local}
+      - DEFAULT_EMBEDDING_PROVIDER=${DEFAULT_EMBEDDING_PROVIDER:-openai}
+      - DEFAULT_EMBEDDING_MODEL=${DEFAULT_EMBEDDING_MODEL:-sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2}
+      - DEFAULT_EMBEDDING_API_KEY=${DEFAULT_EMBEDDING_API_KEY:-}
+      - DEFAULT_EMBEDDING_API_BASE_URL=${DEFAULT_EMBEDDING_API_BASE_URL:-https://api.openai.com/v1}
       # LinuxDO OAuth 配置
       - LINUXDO_CLIENT_ID=${LINUXDO_CLIENT_ID:-11111}
       - LINUXDO_CLIENT_SECRET=${LINUXDO_CLIENT_SECRET:-11111}
       - LINUXDO_REDIRECT_URI=${LINUXDO_REDIRECT_URI:-http://localhost:8000/api/auth/linuxdo/callback}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:8000}
+      - INITIAL_ADMIN_LINUXDO_ID=${INITIAL_ADMIN_LINUXDO_ID:-}
       # 本地账户登录配置
       - LOCAL_AUTH_ENABLED=${LOCAL_AUTH_ENABLED:-true}
       - LOCAL_AUTH_USERNAME=${LOCAL_AUTH_USERNAME:-admin}
@@ -299,6 +315,10 @@ services:
       # 会话配置
       - SESSION_EXPIRE_MINUTES=${SESSION_EXPIRE_MINUTES:-120}
       - SESSION_REFRESH_THRESHOLD_MINUTES=${SESSION_REFRESH_THRESHOLD_MINUTES:-30}
+      # 提示词工坊配置
+      - WORKSHOP_MODE=${WORKSHOP_MODE:-client}
+      - WORKSHOP_CLOUD_URL=${WORKSHOP_CLOUD_URL:-https://mumuverse.space:1566}
+      - WORKSHOP_API_TIMEOUT=${WORKSHOP_API_TIMEOUT:-30}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -339,14 +359,10 @@ docker-compose up -d
 #### 前置准备
 
 ```bash
-# ⚠️ 重要：如果从源码构建，需要先下载 embedding 模型文件
-# 模型文件较大（约 400MB），需放置到以下目录：
-# backend/embedding/models--sentence-transformers--paraphrase-multilingual-MiniLM-L12-v2/
-#
-# 📥 获取方式：
-# - 加入项目 QQ 群或 Linux DO 讨论区获取下载链接
-# - 群号：见项目主页
-# - Linux DO：https://linux.do/t/topic/1100112
+# Embedding 模型默认在首次使用时自动下载（需可访问 HuggingFace）
+# 离线环境可选两种方式：
+# 1) Docker 构建时使用 PRELOAD_EMBEDDING_MODEL=true 预下载模型
+# 2) 手动放置模型到 backend/embedding/models--sentence-transformers--paraphrase-multilingual-MiniLM-L12-v2/
 ```
 
 #### 后端
@@ -410,11 +426,25 @@ LOCAL_AUTH_PASSWORD=your_password
 # LinuxDO OAuth
 LINUXDO_CLIENT_ID=your_client_id
 LINUXDO_CLIENT_SECRET=your_client_secret
-LINUXDO_REDIRECT_URI=http://localhost:8000/api/auth/callback
+LINUXDO_REDIRECT_URI=http://localhost:8000/api/auth/linuxdo/callback
+FRONTEND_URL=http://localhost:8000
 
 # PostgreSQL 连接池（高并发优化）
 DATABASE_POOL_SIZE=30
 DATABASE_MAX_OVERFLOW=20
+
+# Embedding 配置（可选）
+DEFAULT_EMBEDDING_MODE=local
+DEFAULT_EMBEDDING_PROVIDER=openai
+DEFAULT_EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+# API 模式下使用：
+# DEFAULT_EMBEDDING_API_KEY=your_embedding_key
+# DEFAULT_EMBEDDING_API_BASE_URL=https://api.openai.com/v1
+
+# 提示词工坊（可选）
+WORKSHOP_MODE=client
+WORKSHOP_CLOUD_URL=https://mumuverse.space:1566
+WORKSHOP_API_TIMEOUT=30
 ```
 
 ### 中转 API 配置
@@ -454,9 +484,19 @@ OPENAI_BASE_URL=https://your-proxy-service.com/v1
 | `.env` | 环境配置（API Key、数据库密码等） | ✅ 必需 |
 | `docker-compose.yml` | 服务编排配置 | ✅ 必需 |
 | `backend/scripts/init_postgres.sql` | PostgreSQL 扩展安装脚本 | ✅ 自动挂载 |
-| `backend/embedding/models--*/` | Embedding 模型文件 | ⚠️ 自建需要 |
+| `Dockerfile` | 支持 `PRELOAD_EMBEDDING_MODEL` 构建参数，可在构建阶段预下载 embedding 模型 | ⚙️ 可选 |
 
 > **注意**: 使用 Docker Hub 镜像时，模型文件已包含在镜像中，无需额外下载
+
+### 构建参数（源码构建时可选）
+
+```bash
+# 使用国内镜像源加速构建
+USE_CN_MIRROR=true docker-compose build
+
+# 构建时预下载 embedding 模型（适合离线部署）
+PRELOAD_EMBEDDING_MODEL=true docker-compose build
+```
 
 ### 常用命令
 
